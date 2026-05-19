@@ -1,4 +1,23 @@
 import * as XLSX from 'xlsx';
+import type { ComparisonStatus } from '@/types/tfi.types';
+
+/** Mapa de estados de comparación (inglés → español legible) */
+const STATUS_LABELS: Record<ComparisonStatus, string> = {
+  match: 'Coincide',
+  ok_user1: 'Toma 1 correcta',
+  ok_user2: 'Toma 2 correcta',
+  pending_recount: 'Pendiente de reconteo',
+  pending_t2: 'Pendiente Toma 2',
+  pending_t1: 'Pendiente Toma 1',
+  both_different: 'Ambas diferentes',
+};
+
+/**
+ * Traduce un comparison_status a su etiqueta en español.
+ */
+export function translateStatus(status: string): string {
+  return STATUS_LABELS[status as ComparisonStatus] ?? status;
+}
 
 /**
  * Sanitiza un string para usarlo como parte de nombre de archivo.

@@ -50,10 +50,20 @@ export default function PendingPage() {
     );
   }, [lines, articleFilter]);
 
+  // Mapa id → nombre legible para el export
+  const sessionNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of sessions) {
+      map[s.id] = s.location ? `${s.name} — ${s.location}` : s.name;
+    }
+    return map;
+  }, [sessions]);
+
   // Nombre de la sesión activa para mostrarlo en la UI
   const activeSessionName = useMemo(() => {
     if (!selectedSession) return null;
-    return sessions.find((s) => s.id === selectedSession)?.name ?? selectedSession;
+    const s = sessions.find((s) => s.id === selectedSession);
+    return s ? (s.location ? `${s.name} — ${s.location}` : s.name) : selectedSession;
   }, [selectedSession, sessions]);
 
   // Exporta TODOS los pending_recount de la sesión, ignorando el filtro visual de artículo.
@@ -64,9 +74,9 @@ export default function PendingPage() {
       const allPending = await getAllPendingRecountForExport(selectedSession || undefined);
       const sessionLabel = activeSessionName ?? selectedSession ?? 'todas';
       if (format === 'excel') {
-        exportPendingToExcel(allPending, sessionLabel);
+        exportPendingToExcel(allPending, sessionLabel, sessionNameMap);
       } else {
-        exportPendingToCsv(allPending, sessionLabel);
+        exportPendingToCsv(allPending, sessionLabel, sessionNameMap);
       }
     } finally {
       setExportLoading(false);

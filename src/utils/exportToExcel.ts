@@ -8,6 +8,7 @@ import {
   fmtNum,
   calcDiffTemp,
   applyAutoWidth,
+  translateStatus,
 } from './exportHelpers';
 
 // ─── Tipos internos ──────────────────────────────────────────────────────────
@@ -60,9 +61,9 @@ const COMPARISON_HEADER: CellValue[] = [
   'Diferencia final vs teórico',
 ];
 
-function comparisonRow(l: TfiComparisonLine): CellValue[] {
+function comparisonRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
   return [
-    l.session_id,
+    sessionNameMap[l.session_id] ?? l.session_id,
     l.article_id,
     l.article_description ?? '-',
     fmtNum(l.theoretical_qty),
@@ -76,7 +77,7 @@ function comparisonRow(l: TfiComparisonLine): CellValue[] {
     fmtNum(l.difference_user_2),
     fmtNum(l.recount_qty),
     l.recount_user ?? '-',
-    l.comparison_status,
+    translateStatus(l.comparison_status),
     fmtNum(l.final_count_qty),
     fmtNum(l.final_difference_vs_theoretical),
   ];
@@ -97,9 +98,9 @@ const PENDING_HEADER: CellValue[] = [
   'Diferencia temporal',
 ];
 
-function pendingRow(l: TfiComparisonLine): CellValue[] {
+function pendingRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
   return [
-    l.session_id,
+    sessionNameMap[l.session_id] ?? l.session_id,
     l.article_id,
     l.article_description ?? '-',
     fmtNum(l.theoretical_qty),
@@ -107,7 +108,7 @@ function pendingRow(l: TfiComparisonLine): CellValue[] {
     l.user_1 ?? '-',
     fmtNum(l.count_2_qty),
     l.user_2 ?? '-',
-    l.comparison_status,
+    translateStatus(l.comparison_status),
     calcDiffTemp(l.count_1_qty, l.count_2_qty),
   ];
 }
@@ -124,10 +125,10 @@ const RANKING_HEADER: CellValue[] = [
   'Nivel',
 ];
 
-function rankingRow(u: TfiUserPrecision, pos: number): CellValue[] {
+function rankingRow(u: TfiUserPrecision, pos: number, sessionNameMap: Record<string, string>): CellValue[] {
   return [
     pos,
-    u.session_id,
+    sessionNameMap[u.session_id] ?? u.session_id,
     u.user_name,
     Number(u.total_articles),
     Number(u.differences),
@@ -142,15 +143,16 @@ function rankingRow(u: TfiUserPrecision, pos: number): CellValue[] {
 
 export function exportComparisonToExcel(
   lines: TfiComparisonLine[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const compRows: AoA = lines.map(comparisonRow);
+  const compRows: AoA = lines.map((l) => comparisonRow(l, sessionNameMap));
   const compData: AoA = [COMPARISON_HEADER, ...compRows];
 
   // Diferencias críticas: subset de las líneas filtradas con esos estados
   const criticalStatuses = new Set(['both_different', 'ok_user1', 'ok_user2']);
   const criticalLines = lines.filter((l) => criticalStatuses.has(l.comparison_status));
-  const criticalData: AoA = [COMPARISON_HEADER, ...criticalLines.map(comparisonRow)];
+  const criticalData: AoA = [COMPARISON_HEADER, ...criticalLines.map((l) => comparisonRow(l, sessionNameMap))];
 
   const wb = buildWorkbook([
     { name: 'Comparación', data: compData },
@@ -166,9 +168,10 @@ export function exportComparisonToExcel(
 
 export function exportRankingToExcel(
   users: TfiUserPrecision[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const rows: AoA = users.map((u, i) => rankingRow(u, i + 1));
+  const rows: AoA = users.map((u, i) => rankingRow(u, i + 1, sessionNameMap));
   const data: AoA = [RANKING_HEADER, ...rows];
 
   const wb = buildWorkbook([{ name: 'Ranking', data }]);
@@ -181,9 +184,10 @@ export function exportRankingToExcel(
 
 export function exportPendingToExcel(
   lines: TfiComparisonLine[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const rows: AoA = lines.map(pendingRow);
+  const rows: AoA = lines.map((l) => pendingRow(l, sessionNameMap));
   const data: AoA = [PENDING_HEADER, ...rows];
 
   const wb = buildWorkbook([{ name: 'Pendientes', data }]);
@@ -198,10 +202,11 @@ export interface DashboardExportPayload {
   stats: DashboardStats;
   ranking: TfiUserPrecision[];
   allLines: TfiComparisonLine[];
+  sessionNameMap?: Record<string, string>;
 }
 
 export function exportDashboardToExcel(payload: DashboardExportPayload): void {
-  const { session, stats, ranking, allLines } = payload;
+  const { session, stats, ranking, allLines, sessionNameMap = {} } = payload;
 
   const sessionLabel = session
     ? session.location
@@ -220,12 +225,12 @@ export function exportDashboardToExcel(payload: DashboardExportPayload): void {
     ['Precisión global ponderada', Number(Number(stats.weightedPrecision).toFixed(2))],
     ['Precisión global promedio', Number(Number(stats.avgPrecision).toFixed(2))],
     ['Pendientes de reconteo', fmtNum(stats.pendingRecount)],
-    ['Match', fmtNum(stats.matches)],
+    ['Coincide', fmtNum(stats.matches)],
     ['Toma 1 correcta', fmtNum(stats.okUser1)],
     ['Toma 2 correcta', fmtNum(stats.okUser2)],
     ['Ambas diferentes', fmtNum(stats.bothDifferent)],
-    ['Pendientes T2', fmtNum(stats.pendingT2)],
-    ['Pendientes T1', fmtNum(stats.pendingT1)],
+    ['Pendientes Toma 2', fmtNum(stats.pendingT2)],
+    ['Pendientes Toma 1', fmtNum(stats.pendingT1)],
     ['Total líneas', fmtNum(stats.totalLines)],
   ];
 
@@ -233,26 +238,26 @@ export function exportDashboardToExcel(payload: DashboardExportPayload): void {
   const totalLinesDiv = stats.totalLines || 1;
   const estadosData: AoA = [
     ['Estado', 'Total', 'Porcentaje'],
-    ['match', stats.matches, Number(((stats.matches / totalLinesDiv) * 100).toFixed(2))],
-    ['ok_user1', stats.okUser1, Number(((stats.okUser1 / totalLinesDiv) * 100).toFixed(2))],
-    ['ok_user2', stats.okUser2, Number(((stats.okUser2 / totalLinesDiv) * 100).toFixed(2))],
-    ['pending_recount', stats.pendingRecount, Number(((stats.pendingRecount / totalLinesDiv) * 100).toFixed(2))],
-    ['both_different', stats.bothDifferent, Number(((stats.bothDifferent / totalLinesDiv) * 100).toFixed(2))],
-    ['pending_t2', stats.pendingT2, Number(((stats.pendingT2 / totalLinesDiv) * 100).toFixed(2))],
-    ['pending_t1', stats.pendingT1, Number(((stats.pendingT1 / totalLinesDiv) * 100).toFixed(2))],
+    ['Coincide', stats.matches, Number(((stats.matches / totalLinesDiv) * 100).toFixed(2))],
+    ['Toma 1 correcta', stats.okUser1, Number(((stats.okUser1 / totalLinesDiv) * 100).toFixed(2))],
+    ['Toma 2 correcta', stats.okUser2, Number(((stats.okUser2 / totalLinesDiv) * 100).toFixed(2))],
+    ['Pendiente de reconteo', stats.pendingRecount, Number(((stats.pendingRecount / totalLinesDiv) * 100).toFixed(2))],
+    ['Ambas diferentes', stats.bothDifferent, Number(((stats.bothDifferent / totalLinesDiv) * 100).toFixed(2))],
+    ['Pendiente Toma 2', stats.pendingT2, Number(((stats.pendingT2 / totalLinesDiv) * 100).toFixed(2))],
+    ['Pendiente Toma 1', stats.pendingT1, Number(((stats.pendingT1 / totalLinesDiv) * 100).toFixed(2))],
   ];
 
   // ── Hoja 3: Ranking ───────────────────────────────────────────────────────
-  const rankingData: AoA = [RANKING_HEADER, ...ranking.map((u, i) => rankingRow(u, i + 1))];
+  const rankingData: AoA = [RANKING_HEADER, ...ranking.map((u, i) => rankingRow(u, i + 1, sessionNameMap))];
 
   // ── Hoja 4: Pendientes ────────────────────────────────────────────────────
   const pendingLines = allLines.filter((l) => l.comparison_status === 'pending_recount');
-  const pendingData: AoA = [PENDING_HEADER, ...pendingLines.map(pendingRow)];
+  const pendingData: AoA = [PENDING_HEADER, ...pendingLines.map((l) => pendingRow(l, sessionNameMap))];
 
   // ── Hoja 5: Diferencias críticas ──────────────────────────────────────────
   const criticalStatuses = new Set(['both_different', 'ok_user1', 'ok_user2']);
   const criticalLines = allLines.filter((l) => criticalStatuses.has(l.comparison_status));
-  const criticalData: AoA = [COMPARISON_HEADER, ...criticalLines.map(comparisonRow)];
+  const criticalData: AoA = [COMPARISON_HEADER, ...criticalLines.map((l) => comparisonRow(l, sessionNameMap))];
 
   const wb = buildWorkbook([
     { name: 'Resumen', data: resumenData },

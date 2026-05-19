@@ -21,7 +21,7 @@ const defaultFilters = {
 };
 
 export default function ComparisonPage() {
-  const { selectedSession } = useSession();
+  const { selectedSession, sessions } = useSession();
   const [filters, setFilters] = useState(defaultFilters);
   const [lines, setLines] = useState<ComparisonLine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,6 +73,15 @@ export default function ComparisonPage() {
 
   const handleReset = () => setFilters(defaultFilters);
 
+  // Mapa id → nombre legible para el export
+  const sessionNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of sessions) {
+      map[s.id] = s.location ? `${s.name} — ${s.location}` : s.name;
+    }
+    return map;
+  }, [sessions]);
+
   // Exporta TODOS los registros filtrados (sin paginación visual)
   const handleExport = async (format: 'excel' | 'csv') => {
     setExportLoading(true);
@@ -87,10 +96,11 @@ export default function ComparisonPage() {
         pendingOnly: filters.pendingOnly,
       };
       const allRows = await getAllComparisonLinesForExport(exportFilters);
+      const sessionLabel = selectedSession ? (sessionNameMap[selectedSession] ?? selectedSession) : 'todas';
       if (format === 'excel') {
-        exportComparisonToExcel(allRows, selectedSession ?? 'todas');
+        exportComparisonToExcel(allRows, sessionLabel, sessionNameMap);
       } else {
-        exportComparisonToCsv(allRows, selectedSession ?? 'todas');
+        exportComparisonToCsv(allRows, sessionLabel, sessionNameMap);
       }
     } finally {
       setExportLoading(false);

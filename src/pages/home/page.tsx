@@ -36,6 +36,15 @@ export default function HomePage() {
     fetchStats();
   }, [fetchStats]);
 
+  // Mapa id → nombre legible para el export
+  const sessionNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of sessions) {
+      map[s.id] = s.location ? `${s.name} — ${s.location}` : s.name;
+    }
+    return map;
+  }, [sessions]);
+
   // Nombre legible de la sesión activa
   const activeSessionName = useMemo(() => {
     if (!selectedSession) return null;
@@ -64,7 +73,7 @@ export default function HomePage() {
         getAllUserPrecisionForExport(selectedSession || undefined),
       ]);
       if (allLines.length === 0) { showExportToast(); return; }
-      exportDashboardToExcel({ session: activeSession, stats, ranking, allLines });
+      exportDashboardToExcel({ session: activeSession, stats, ranking, allLines, sessionNameMap });
     } finally {
       setExportLoading(false);
     }

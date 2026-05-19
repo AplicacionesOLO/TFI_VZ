@@ -38,6 +38,15 @@ export default function RankingPage() {
     fetchData();
   }, [fetchData]);
 
+  // Mapa id → nombre legible para el export
+  const sessionNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of sessions) {
+      map[s.id] = s.location ? `${s.name} — ${s.location}` : s.name;
+    }
+    return map;
+  }, [sessions]);
+
   // Nombre legible de la sesión activa
   const activeSessionName = useMemo(() => {
     if (!selectedSession) return null;
@@ -53,9 +62,9 @@ export default function RankingPage() {
       const allUsers = await getAllUserPrecisionForExport(selectedSession || undefined);
       const sessionLabel = activeSessionName ?? selectedSession ?? 'todas';
       if (format === 'excel') {
-        exportRankingToExcel(allUsers, sessionLabel);
+        exportRankingToExcel(allUsers, sessionLabel, sessionNameMap);
       } else {
-        exportRankingToCsv(allUsers, sessionLabel);
+        exportRankingToCsv(allUsers, sessionLabel, sessionNameMap);
       }
     } finally {
       setExportLoading(false);

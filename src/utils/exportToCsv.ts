@@ -6,6 +6,7 @@ import {
   fmtNum,
   fmtPct,
   calcDiffTemp,
+  translateStatus,
 } from './exportHelpers';
 
 // ─── Helpers internos ────────────────────────────────────────────────────────
@@ -60,9 +61,9 @@ const COMPARISON_HEADER: CellValue[] = [
   'Diferencia final vs teórico',
 ];
 
-function comparisonRow(l: TfiComparisonLine): CellValue[] {
+function comparisonRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
   return [
-    l.session_id,
+    sessionNameMap[l.session_id] ?? l.session_id,
     l.article_id,
     l.article_description ?? '-',
     fmtNum(l.theoretical_qty),
@@ -76,7 +77,7 @@ function comparisonRow(l: TfiComparisonLine): CellValue[] {
     fmtNum(l.difference_user_2),
     fmtNum(l.recount_qty),
     l.recount_user ?? '-',
-    l.comparison_status,
+    translateStatus(l.comparison_status),
     fmtNum(l.final_count_qty),
     fmtNum(l.final_difference_vs_theoretical),
   ];
@@ -92,10 +93,10 @@ const RANKING_HEADER: CellValue[] = [
   'Nivel',
 ];
 
-function rankingRow(u: TfiUserPrecision, pos: number): CellValue[] {
+function rankingRow(u: TfiUserPrecision, pos: number, sessionNameMap: Record<string, string>): CellValue[] {
   return [
     pos,
-    u.session_id,
+    sessionNameMap[u.session_id] ?? u.session_id,
     u.user_name,
     Number(u.total_articles),
     Number(u.differences),
@@ -117,9 +118,9 @@ const PENDING_HEADER: CellValue[] = [
   'Diferencia temporal',
 ];
 
-function pendingRow(l: TfiComparisonLine): CellValue[] {
+function pendingRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
   return [
-    l.session_id,
+    sessionNameMap[l.session_id] ?? l.session_id,
     l.article_id,
     l.article_description ?? '-',
     fmtNum(l.theoretical_qty),
@@ -127,7 +128,7 @@ function pendingRow(l: TfiComparisonLine): CellValue[] {
     l.user_1 ?? '-',
     fmtNum(l.count_2_qty),
     l.user_2 ?? '-',
-    l.comparison_status,
+    translateStatus(l.comparison_status),
     calcDiffTemp(l.count_1_qty, l.count_2_qty),
   ];
 }
@@ -137,9 +138,10 @@ function pendingRow(l: TfiComparisonLine): CellValue[] {
 
 export function exportComparisonToCsv(
   lines: TfiComparisonLine[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const rows = lines.map(comparisonRow);
+  const rows = lines.map((l) => comparisonRow(l, sessionNameMap));
   const safe = sanitizeFilename(sessionName);
   downloadCsv(toCsvString([COMPARISON_HEADER, ...rows]), `TFI_COMPARACION_${safe}_${todayStr()}.csv`);
 }
@@ -149,9 +151,10 @@ export function exportComparisonToCsv(
 
 export function exportRankingToCsv(
   users: TfiUserPrecision[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const rows = users.map((u, i) => rankingRow(u, i + 1));
+  const rows = users.map((u, i) => rankingRow(u, i + 1, sessionNameMap));
   const safe = sanitizeFilename(sessionName);
   downloadCsv(toCsvString([RANKING_HEADER, ...rows]), `TFI_RANKING_${safe}_${todayStr()}.csv`);
 }
@@ -161,9 +164,10 @@ export function exportRankingToCsv(
 
 export function exportPendingToCsv(
   lines: TfiComparisonLine[],
-  sessionName: string
+  sessionName: string,
+  sessionNameMap: Record<string, string> = {}
 ): void {
-  const rows = lines.map(pendingRow);
+  const rows = lines.map((l) => pendingRow(l, sessionNameMap));
   const safe = sanitizeFilename(sessionName);
   downloadCsv(toCsvString([PENDING_HEADER, ...rows]), `TFI_PENDIENTES_RECONTEO_${safe}_${todayStr()}.csv`);
 }
@@ -193,23 +197,23 @@ export function exportDashboardToCsv(
     ['Precisión global ponderada', fmtPct(stats.weightedPrecision)],
     ['Precisión global promedio', fmtPct(stats.avgPrecision)],
     ['Pendientes de reconteo', fmtNum(stats.pendingRecount)],
-    ['Match', fmtNum(stats.matches)],
+    ['Coincide', fmtNum(stats.matches)],
     ['Toma 1 correcta', fmtNum(stats.okUser1)],
     ['Toma 2 correcta', fmtNum(stats.okUser2)],
     ['Ambas diferentes', fmtNum(stats.bothDifferent)],
-    ['Pendientes T2', fmtNum(stats.pendingT2)],
-    ['Pendientes T1', fmtNum(stats.pendingT1)],
+    ['Pendientes Toma 2', fmtNum(stats.pendingT2)],
+    ['Pendientes Toma 1', fmtNum(stats.pendingT1)],
     ['Total líneas', fmtNum(stats.totalLines)],
     [],
     ['--- Distribución de estados ---'],
     ['Estado', 'Total', 'Porcentaje'],
-    ['match', stats.matches, fmtPct((stats.matches / totalLinesDiv) * 100)],
-    ['ok_user1', stats.okUser1, fmtPct((stats.okUser1 / totalLinesDiv) * 100)],
-    ['ok_user2', stats.okUser2, fmtPct((stats.okUser2 / totalLinesDiv) * 100)],
-    ['pending_recount', stats.pendingRecount, fmtPct((stats.pendingRecount / totalLinesDiv) * 100)],
-    ['both_different', stats.bothDifferent, fmtPct((stats.bothDifferent / totalLinesDiv) * 100)],
-    ['pending_t2', stats.pendingT2, fmtPct((stats.pendingT2 / totalLinesDiv) * 100)],
-    ['pending_t1', stats.pendingT1, fmtPct((stats.pendingT1 / totalLinesDiv) * 100)],
+    ['Coincide', stats.matches, fmtPct((stats.matches / totalLinesDiv) * 100)],
+    ['Toma 1 correcta', stats.okUser1, fmtPct((stats.okUser1 / totalLinesDiv) * 100)],
+    ['Toma 2 correcta', stats.okUser2, fmtPct((stats.okUser2 / totalLinesDiv) * 100)],
+    ['Pendiente de reconteo', stats.pendingRecount, fmtPct((stats.pendingRecount / totalLinesDiv) * 100)],
+    ['Ambas diferentes', stats.bothDifferent, fmtPct((stats.bothDifferent / totalLinesDiv) * 100)],
+    ['Pendiente Toma 2', stats.pendingT2, fmtPct((stats.pendingT2 / totalLinesDiv) * 100)],
+    ['Pendiente Toma 1', stats.pendingT1, fmtPct((stats.pendingT1 / totalLinesDiv) * 100)],
   ];
 
   const safeName = sanitizeFilename(session?.name ?? 'sesion');
