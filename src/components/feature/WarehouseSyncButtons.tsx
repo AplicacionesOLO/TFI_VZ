@@ -44,6 +44,7 @@ interface Toast {
 
 const POLL_INTERVAL_MS = 3000;
 const STALE_THRESHOLD_MINUTES = 60;
+const ORPHAN_THRESHOLD_SECONDS = 300; // 5 minutos: si n8n no creó registros en este tiempo, es huérfano
 const SUCCESS_DISPLAY_MS = 4000;
 const ERROR_DISPLAY_MS = 6000;
 
@@ -231,8 +232,34 @@ export default function WarehouseSyncButtons() {
           const latestSync: TfiSyncRun | null = await getLatestSyncRun(sessionId);
 
           if (!latestSync) {
-            // n8n aún no ha creado ningún registro — seguimos esperando
-            console.log(`[Poll] ${warehouseName} — aún sin registros en tfi_sync_runs`);
+            // n8n aún no ha creado ningún registro — verificar si es lock huérfano
+            const totalElapsed = calcElapsedFrom(startedAt);
+            if (totalElapsed > ORPHAN_THRESHOLD_SECONDS) {
+              // 5+ minutos sin que n8n cree registros → lock huérfano
+              console.log(`[Poll] ${warehouseName} — lock huérfano (${totalElapsed}s sin registros), liberando`);
+              clearTimers(warehouseId);
+              await releaseSyncLock(
+                sessionId,
+                'Lock huérfano — n8n nunca creó registros de sync (5+ min)'
+              ).catch(() => {});
+              if (!mountedRef.current) return;
+
+              setSyncStates((prev) => ({
+                ...prev,
+                [warehouseId]: {
+                  ...buildInitialState()[warehouseId],
+                },
+              }));
+
+              showToast(
+                `Sincronización de ${warehouseName} no respondió — lock liberado`,
+                'warning'
+              );
+
+              return;
+            }
+            // Todavía dentro del margen de espera, seguimos
+            console.log(`[Poll] ${warehouseName} — aún sin registros en tfi_sync_runs (${totalElapsed}s)`);
             return;
           }
 
@@ -332,16 +359,48 @@ export default function WarehouseSyncButtons() {
           if (!warehouse) continue;
 
           const stale = isStale(lock.started_at);
+
+          // ── Stale: liberar automáticamente, no molestar al usuario ──
+          if (stale) {
+            console.log(
+              `[Recovery] ${warehouse.name} — lock stale (${calcElapsedFrom(lock.started_at)}s), liberando automáticamente`
+            );
+            await releaseSyncLock(
+              lock.session_id,
+              'Lock huérfano — liberado automáticamente en recovery (60+ min)'
+            ).catch((err) => console.error(`[Recovery] Error liberando lock stale de ${warehouse.name}:`, err));
+            // No mostrar nada en UI, queda idle
+            continue;
+          }
+
+          // ── Lock activo reciente: verificar si es huérfano antes de hacer polling ──
           const baseElapsed = calcElapsedFrom(lock.started_at);
 
+          // Si el lock tiene más de 5 min, verificar que exista al menos un sync run
+          if (baseElapsed > ORPHAN_THRESHOLD_SECONDS) {
+            const latestSync = await getLatestSyncRun(lock.session_id).catch(() => null);
+            if (!latestSync) {
+              console.log(
+                `[Recovery] ${warehouse.name} — lock huérfano (${baseElapsed}s sin registros), liberando`
+              );
+              await releaseSyncLock(
+                lock.session_id,
+                'Lock huérfano — n8n nunca creó registros de sync'
+              ).catch((err) =>
+                console.error(`[Recovery] Error liberando lock huérfano de ${warehouse.name}:`, err)
+              );
+              continue;
+            }
+          }
+
           console.log(
-            `[Recovery] ${warehouse.name} — is_running=true, stale=${stale}, baseElapsed=${baseElapsed}s`
+            `[Recovery] ${warehouse.name} — is_running=true, baseElapsed=${baseElapsed}s`
           );
 
           setSyncStates((prev) => ({
             ...prev,
             [warehouse.id]: {
-              status: stale ? 'stale' : 'syncing',
+              status: 'syncing',
               syncRunId: lock.sync_run_id,
               startedAt: lock.started_at,
               error: null,
@@ -349,11 +408,7 @@ export default function WarehouseSyncButtons() {
             },
           }));
 
-          // Solo reanudar polling si no está stale
-          if (!stale) {
-            console.log(`[Recovery] Reanudando polling para ${warehouse.name}`);
-            startPolling(warehouse.id, lock.session_id, baseElapsed, lock.started_at);
-          }
+          startPolling(warehouse.id, lock.session_id, baseElapsed, lock.started_at);
         }
       } catch (err) {
         console.error('[Recovery] Error recuperando locks:', err);
