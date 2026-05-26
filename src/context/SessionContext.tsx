@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { getSessions } from '@/services/tfi.service';
 import type { TfiSessionWithCount } from '@/types/tfi.types';
 
@@ -8,15 +8,32 @@ interface SessionContextValue {
   setSelectedSession: (id: string) => void;
   loadingSessions: boolean;
   sessionsError: string | null;
+  selectedSituation: string;
+  setSelectedSituation: (situation: string) => void;
+  refreshTrigger: number;
+  triggerRefresh: () => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+
+// Helper: determina si una sesión está activa según los estados reales de la base de datos
+function isSessionActive(status: string): boolean {
+  return status === 'active' || status === 'open' || status === 'reviewing';
+}
+
+const EXCLUDED_SESSION_NAMES = ['Sillaca pruebas'];
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<TfiSessionWithCount[]>([]);
   const [selectedSession, setSelectedSession] = useState<string>('');
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [selectedSituation, setSelectedSituation] = useState<string>('TODOS');
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const triggerRefresh = useCallback(() => {
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,12 +43,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setSessions(data);
         if (data.length > 0) {
-          // 1. Primera sesión active con datos reales (total_lines > 0)
-          const activeWithData = data.find((s) => s.status === 'active' && s.total_lines > 0);
-          // 2. Fallback: primera sesión active (sin datos)
-          const activeAny = data.find((s) => s.status === 'active');
-          // 3. Último fallback: primera de la lista
-          setSelectedSession((activeWithData ?? activeAny ?? data[0]).id);
+          const visible = data.filter((s) => !EXCLUDED_SESSION_NAMES.includes(s.name));
+          // 1. Primera sesión activa (open/reviewing/active) con datos reales (total_lines > 0)
+          const activeWithData = visible.find((s) => isSessionActive(s.status) && s.total_lines > 0);
+          // 2. Fallback: primera sesión activa (sin datos)
+          const activeAny = visible.find((s) => isSessionActive(s.status));
+          // 3. Último fallback: primera de la lista visible
+          setSelectedSession((activeWithData ?? activeAny ?? visible[0] ?? data[0]).id);
         }
       })
       .catch((err) => {
@@ -44,11 +62,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshTrigger]);
 
   return (
     <SessionContext.Provider
-      value={{ sessions, selectedSession, setSelectedSession, loadingSessions, sessionsError }}
+      value={{
+        sessions,
+        selectedSession,
+        setSelectedSession,
+        loadingSessions,
+        sessionsError,
+        selectedSituation,
+        setSelectedSituation,
+        refreshTrigger,
+        triggerRefresh,
+      }}
     >
       {children}
     </SessionContext.Provider>

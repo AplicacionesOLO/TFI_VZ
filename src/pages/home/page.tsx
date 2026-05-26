@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import AppLayout from '@/components/feature/AppLayout';
+import WarehouseSyncButtons from '@/components/feature/WarehouseSyncButtons';
 import KpiCard from './components/KpiCard';
 import { Link } from 'react-router-dom';
 import { useSession } from '@/context/SessionContext';
@@ -12,7 +13,7 @@ import { exportDashboardToExcel } from '@/utils/exportToExcel';
 import { exportDashboardToCsv } from '@/utils/exportToCsv';
 
 export default function HomePage() {
-  const { selectedSession, sessions } = useSession();
+  const { selectedSession, sessions, refreshTrigger } = useSession();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +31,7 @@ export default function HomePage() {
       .then((dashStats) => setStats(dashStats))
       .catch((err) => setError(err?.message ?? 'Error al cargar el dashboard'))
       .finally(() => setLoading(false));
-  }, [selectedSession]);
+  }, [selectedSession, refreshTrigger]);
 
   useEffect(() => {
     fetchStats();
@@ -147,6 +148,17 @@ export default function HomePage() {
               CSV
             </button>
           </div>
+        </div>
+
+        {/* Sincronización por almacén */}
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-6 h-6 flex items-center justify-center">
+              <i className="ri-refresh-line text-gray-400"></i>
+            </div>
+            <h2 className="text-sm font-semibold text-gray-700">Sincronizar Almacenes</h2>
+          </div>
+          <WarehouseSyncButtons />
         </div>
 
         {/* Error */}

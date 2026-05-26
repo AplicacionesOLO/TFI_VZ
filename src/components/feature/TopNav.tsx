@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useSession } from '@/context/SessionContext';
+import TfiRefreshControl from './TfiRefreshControl';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: 'ri-dashboard-3-line' },
@@ -37,23 +38,29 @@ export default function TopNav() {
     setMenuOpen(false);
   }, [location]);
 
-  // Sesiones filtradas según toggle
+  // Sesiones excluidas permanentemente del selector
+  const excludedSessionNames = useMemo(() => new Set(['Sillaca pruebas']), []);
+
+  // Sesiones filtradas según toggle y excluidas
   const visibleSessions = useMemo(
-    () => (hideEmpty ? sessions.filter((s) => s.total_lines > 0) : sessions),
-    [sessions, hideEmpty]
+    () => {
+      const filtered = sessions.filter((s) => !excludedSessionNames.has(s.name));
+      return hideEmpty ? filtered.filter((s) => s.total_lines > 0) : filtered;
+    },
+    [sessions, hideEmpty, excludedSessionNames]
   );
 
-  // Si la sesión seleccionada queda oculta al activar el filtro, reasignar a la primera visible
+  // Si la sesión seleccionada queda oculta al activar el filtro o fue excluida, reasignar a la primera visible
   useEffect(() => {
-    if (hideEmpty && visibleSessions.length > 0) {
+    if (visibleSessions.length > 0) {
       const stillVisible = visibleSessions.some((s) => s.id === selectedSession);
       if (!stillVisible) {
         setSelectedSession(visibleSessions[0].id);
       }
     }
-  }, [hideEmpty, visibleSessions, selectedSession, setSelectedSession]);
+  }, [visibleSessions, selectedSession, setSelectedSession]);
 
-  const emptySessions = sessions.filter((s) => s.total_lines === 0);
+  const emptySessions = sessions.filter((s) => s.total_lines === 0 && !excludedSessionNames.has(s.name));
 
   return (
     <header
@@ -96,6 +103,8 @@ export default function TopNav() {
 
           {/* Right: Session selector + indicator */}
           <div className="hidden md:flex items-center gap-3">
+            <TfiRefreshControl />
+            <div className="h-4 w-px bg-gray-200"></div>
             {/* Live indicator */}
             <div className="flex items-center gap-2 text-xs text-gray-400 font-medium">
               <span className="w-2 h-2 flex items-center justify-center">

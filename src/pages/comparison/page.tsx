@@ -6,7 +6,7 @@ import LoadingState from '@/components/base/LoadingState';
 import ErrorState from '@/components/base/ErrorState';
 import ExportButtons from '@/components/feature/ExportButtons';
 import { useSession } from '@/context/SessionContext';
-import { getComparisonLines, getDistinctUsers, getAllComparisonLinesForExport } from '@/services/tfi.service';
+import { getComparisonLines, getDistinctUsers, getAllComparisonLinesForExport, getAvailableSituations } from '@/services/tfi.service';
 import { exportComparisonToExcel } from '@/utils/exportToExcel';
 import { exportComparisonToCsv } from '@/utils/exportToCsv';
 import type { ComparisonLine } from '@/types/tfi.types';
@@ -16,18 +16,20 @@ const defaultFilters = {
   user1: '',
   user2: '',
   status: '',
+  situation: 'TODOS',
   onlyDiffs: false,
   pendingOnly: false,
 };
 
 export default function ComparisonPage() {
-  const { selectedSession, sessions } = useSession();
+  const { selectedSession, sessions, selectedSituation, refreshTrigger } = useSession();
   const [filters, setFilters] = useState(defaultFilters);
   const [lines, setLines] = useState<ComparisonLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [users1, setUsers1] = useState<string[]>([]);
   const [users2, setUsers2] = useState<string[]>([]);
+  const [availableSituations, setAvailableSituations] = useState<string[]>(['TODOS']);
   const [exportLoading, setExportLoading] = useState(false);
 
   // selectedSession es la ÚNICA fuente de verdad para la sesión
@@ -43,6 +45,7 @@ export default function ComparisonPage() {
       comparison_status: filters.status || undefined,
       onlyDiffs: filters.onlyDiffs,
       pendingOnly: filters.pendingOnly,
+      situation: filters.situation || undefined,
     };
 
     Promise.all([
@@ -56,11 +59,31 @@ export default function ComparisonPage() {
       })
       .catch((err) => setError(err?.message ?? 'Error al cargar comparación'))
       .finally(() => setLoading(false));
-  }, [selectedSession, filters.article, filters.user1, filters.user2, filters.status, filters.onlyDiffs, filters.pendingOnly]);
+  }, [selectedSession, filters.article, filters.user1, filters.user2, filters.status, filters.onlyDiffs, filters.pendingOnly, filters.situation, refreshTrigger]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Cargar situaciones disponibles dinámicamente según la sesión activa
+  useEffect(() => {
+    if (!selectedSession) {
+      setAvailableSituations(['TODOS']);
+      return;
+    }
+    getAvailableSituations(selectedSession)
+      .then((situations) => {
+        setAvailableSituations(situations);
+      })
+      .catch(() => {
+        setAvailableSituations(['TODOS']);
+      });
+  }, [selectedSession]);
+
+  // Sincronizar filtro de situación con el global del header
+  useEffect(() => {
+    setFilters((prev) => ({ ...prev, situation: selectedSituation }));
+  }, [selectedSituation]);
 
   // Resetear filtros de contenido cuando cambia la sesión global
   useEffect(() => {
@@ -94,6 +117,7 @@ export default function ComparisonPage() {
         comparison_status: filters.status || undefined,
         onlyDiffs: filters.onlyDiffs,
         pendingOnly: filters.pendingOnly,
+        situation: filters.situation || undefined,
       };
       const allRows = await getAllComparisonLinesForExport(exportFilters);
       const sessionLabel = selectedSession ? (sessionNameMap[selectedSession] ?? selectedSession) : 'todas';
@@ -153,6 +177,7 @@ export default function ComparisonPage() {
           <FilterBar
             users1={users1}
             users2={users2}
+            situationOptions={availableSituations}
             filters={filters}
             onChange={handleChange}
             onReset={handleReset}

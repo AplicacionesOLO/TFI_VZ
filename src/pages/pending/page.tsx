@@ -12,7 +12,7 @@ import { exportPendingToCsv } from '@/utils/exportToCsv';
 import type { ComparisonLine } from '@/types/tfi.types';
 
 export default function PendingPage() {
-  const { selectedSession, sessions } = useSession();
+  const { selectedSession, sessions, refreshTrigger } = useSession();
   const [articleFilter, setArticleFilter] = useState('');
   const [lines, setLines] = useState<ComparisonLine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +31,7 @@ export default function PendingPage() {
       .then(setLines)
       .catch((err) => setError(err?.message ?? 'Error al cargar pendientes'))
       .finally(() => setLoading(false));
-  }, [selectedSession]);
+  }, [selectedSession, refreshTrigger]);
 
   useEffect(() => {
     fetchData();

@@ -1,11 +1,13 @@
 interface FilterBarProps {
   users1: string[];
   users2: string[];
+  situationOptions: string[];
   filters: {
     article: string;
     user1: string;
     user2: string;
     status: string;
+    situation: string;
     onlyDiffs: boolean;
     pendingOnly: boolean;
   };
@@ -24,7 +26,7 @@ const statusOptions: { value: string; label: string }[] = [
   { value: 'both_different', label: 'AMBAS DIFF.' },
 ];
 
-export default function FilterBar({ users1, users2, filters, onChange, onReset }: FilterBarProps) {
+export default function FilterBar({ users1, users2, situationOptions, filters, onChange, onReset }: FilterBarProps) {
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4">
       <div className="flex flex-wrap gap-3 items-end">
@@ -83,6 +85,20 @@ export default function FilterBar({ users1, users2, filters, onChange, onReset }
           >
             {statusOptions.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Situación */}
+        <div className="flex flex-col gap-1 min-w-[150px]">
+          <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Situación</label>
+          <select
+            value={filters.situation}
+            onChange={(e) => onChange('situation', e.target.value)}
+            className="border border-gray-200 rounded-lg text-sm px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 cursor-pointer"
+          >
+            {situationOptions.map((s) => (
+              <option key={s} value={s}>{s}</option>
             ))}
           </select>
         </div>

@@ -44,7 +44,19 @@ export function todayStr(): string {
 }
 
 /**
- * Calcula el nivel de precisión igual que el frontend de ranking.
+ * Calcula el nivel de precisión para ranking separado.
+ * Regla: >=95% Bueno, >=85% Regular, <85% Malo.
+ * Si hasEnoughData es false → Muestra insuficiente.
+ */
+export function rankingLevel(pct: number, hasEnoughData: boolean): string {
+  if (!hasEnoughData) return 'Muestra insuficiente';
+  if (pct >= 95) return 'Bueno';
+  if (pct >= 85) return 'Regular';
+  return 'Malo';
+}
+
+/**
+ * Calcula el nivel de precisión igual que el frontend de ranking (legado).
  */
 export function precisionLevel(pct: number): string {
   if (pct >= 98) return 'Excelente';

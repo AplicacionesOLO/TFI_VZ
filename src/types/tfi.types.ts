@@ -1,3 +1,5 @@
+export type TfiSituation = string;
+
 export type ComparisonStatus =
   | 'match'
   | 'ok_user1'
@@ -7,7 +9,8 @@ export type ComparisonStatus =
   | 'pending_t1'
   | 'both_different';
 
-export type SessionStatus = 'active' | 'closed' | 'cancelled' | 'draft';
+// La base de datos usa 'open' y 'reviewing' como estados de sesión activa
+export type SessionStatus = 'active' | 'open' | 'reviewing' | 'closed' | 'cancelled' | 'draft';
 
 export interface TfiSession {
   id: string;
@@ -44,6 +47,12 @@ export interface TfiComparisonLine {
   comparison_status: ComparisonStatus;
   final_count_qty: number | null;
   final_difference_vs_theoretical: number | null;
+  situation_1: string | null;
+  situation_2: string | null;
+  situation_recount: string | null;
+  estado_formulario_1: string | null;
+  estado_formulario_2: string | null;
+  estado_formulario_recount: string | null;
 }
 
 // Alias for backward compatibility across pages
@@ -59,6 +68,53 @@ export interface TfiUserPrecision {
 
 // Alias for backward compatibility
 export type UserPrecision = TfiUserPrecision;
+
+// ─── Nuevos tipos para ranking separado ─────────────────────────────────────
+
+export type RankingType = 'counts' | 'recounts' | 'global';
+
+export interface UserRankingCounts {
+  user_name: string;
+  display_name: string;
+  total_conteo_1: number;
+  errores_conteo_1: number;
+  total_conteo_2: number;
+  errores_conteo_2: number;
+  total_articulos: number;
+  total_errores: number;
+  precision: number;
+  hasEnoughData: boolean;
+}
+
+export interface UserRankingRecounts {
+  user_name: string;
+  display_name: string;
+  total_reconteos: number;
+  errores_reconteo: number;
+  precision: number;
+  hasEnoughData: boolean;
+}
+
+export interface UserRankingGlobal {
+  user_name: string;
+  display_name: string;
+  total_conteos: number;
+  errores_conteos: number;
+  total_reconteos: number;
+  errores_reconteo: number;
+  precision_conteos: number;
+  precision_reconteo: number;
+  precision_global: number;
+  hasEnoughData: boolean;
+}
+
+export interface RankingsBundle {
+  counts: UserRankingCounts[];
+  recounts: UserRankingRecounts[];
+  global: UserRankingGlobal[];
+}
+
+// ─── Fin nuevos tipos ───────────────────────────────────────────────────────
 
 export interface TfiGlobalPrecision {
   session_id: string;
@@ -80,6 +136,7 @@ export interface ComparisonFilters {
   onlyDifferences?: boolean;
   onlyDiffs?: boolean;
   pendingOnly?: boolean;
+  situation?: string;
 }
 
 export interface DashboardStats {
@@ -96,4 +153,26 @@ export interface DashboardStats {
   bothDifferent: number;
   totalLines: number;
   recentDiffs: TfiComparisonLine[];
+}
+
+export interface N8nRefreshPayload {
+  session_id: string;
+  session_name: string;
+  location: string | null;
+  situation: string;
+  triggered_from: string;
+  timestamp: string;
+  warehouse?: string;
+  warehouse_id?: string;
+}
+
+export interface TfiSyncRun {
+  id: number;
+  session_id: string;
+  situation: string | null;
+  status: 'running' | 'completed' | 'failed' | string;
+  started_at: string;
+  finished_at: string | null;
+  total_rows: number | null;
+  error_message: string | null;
 }

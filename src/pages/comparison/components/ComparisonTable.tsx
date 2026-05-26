@@ -32,12 +32,15 @@ export default function ComparisonTable({ data }: ComparisonTableProps) {
               <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 py-3">Usuario Reconteo</th>
               <th className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 py-3">Estado</th>
               <th className="text-right text-xs font-semibold text-gray-400 uppercase tracking-wider px-5 py-3">Dif. Final</th>
+              <th className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 py-3">Sit. T1</th>
+              <th className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 py-3">Sit. T2</th>
+              <th className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 py-3">Sit. Rec.</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={10} className="text-center py-12 text-gray-400 text-sm">
+                <td colSpan={13} className="text-center py-12 text-gray-400 text-sm">
                   <i className="ri-search-line text-2xl block mb-2"></i>
                   No se encontraron resultados con los filtros aplicados
                 </td>
@@ -88,6 +91,15 @@ export default function ComparisonTable({ data }: ComparisonTableProps) {
                         : (row.final_difference_vs_theoretical ?? '—')}
                     </span>
                   </td>
+                  <td className="px-3 py-3.5 text-center">
+                    <SituationCell value={row.situation_1} />
+                  </td>
+                  <td className="px-3 py-3.5 text-center">
+                    <SituationCell value={row.situation_2} />
+                  </td>
+                  <td className="px-3 py-3.5 text-center">
+                    <SituationCell value={row.situation_recount} />
+                  </td>
                 </tr>
               ))
             )}
@@ -121,5 +133,21 @@ export default function ComparisonTable({ data }: ComparisonTableProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function SituationCell({ value }: { value: string | null }) {
+  if (!value) return <span className="text-gray-300 text-sm">—</span>;
+
+  const colorMap: Record<string, string> = {
+    APLICADO: 'text-emerald-700 bg-emerald-50',
+    DISPONIBLE: 'text-sky-700 bg-sky-50',
+    CANCELADO: 'text-red-700 bg-red-50',
+  };
+
+  return (
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${colorMap[value] ?? 'text-gray-600 bg-gray-100'}`}>
+      {value}
+    </span>
   );
 }

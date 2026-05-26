@@ -7,12 +7,40 @@ import type {
   TfiGlobalPrecision,
   ComparisonFilters,
   DashboardStats,
+  TfiSyncRun,
+  RankingsBundle,
+  UserRankingCounts,
+  UserRankingRecounts,
+  UserRankingGlobal,
 } from '@/types/tfi.types';
+
+// Columnas explícitas de v_tfi_comparison_lines para evitar ambigüedad con select('*')
+const V_TFI_COMPARISON_LINES_COLUMNS =
+  'id,session_id,article_id,article_description,theoretical_qty,take_1_name,count_1_qty,difference_1_wms,user_1,take_2_name,count_2_qty,difference_2_wms,user_2,recount_qty,recount_user,difference_user_1,difference_user_2,comparison_status,final_count_qty,final_difference_vs_theoretical,situation_1,situation_2,situation_recount,estado_formulario_1,estado_formulario_2,estado_formulario_recount';
+
+// Columnas mínimas para cálculo de ranking (performance)
+const RANKING_COLUMNS =
+  'id,session_id,user_1,take_1_name,difference_1_wms,user_2,take_2_name,difference_2_wms,recount_user,recount_qty,theoretical_qty';
+
+// ─── Helper: filtra líneas por situación ──────────────────────────────────────
+function filterBySituation(
+  lines: TfiComparisonLine[],
+  situation: string | undefined
+): TfiComparisonLine[] {
+  if (!situation || situation === 'TODOS') return lines;
+  const target = situation.toUpperCase();
+  return lines.filter(
+    (l) =>
+      (l.situation_1 ?? '').toUpperCase() === target ||
+      (l.situation_2 ?? '').toUpperCase() === target ||
+      (l.situation_recount ?? '').toUpperCase() === target
+  );
+}
 
 // ─── Helper: trae TODOS los registros superando el límite de 1000 de Supabase ──
 // Usa paginación interna con .range() en lotes de pageSize hasta agotar.
 async function fetchAllPages<T>(
-  buildQuery: (from: number, to: number) => ReturnType<typeof supabase.from>,
+  buildQuery: (from: number, to: number) => any,
   pageSize = 1000
 ): Promise<T[]> {
   const results: T[] = [];
@@ -34,18 +62,22 @@ async function fetchAllPages<T>(
 
 export async function getSessions(): Promise<TfiSessionWithCount[]> {
   // Trae sesiones y el conteo real de líneas desde tfi_count_lines en paralelo
-  const [sessionsRes, countsRes] = await Promise.all([
-    supabase.from('tfi_sessions').select('*').order('created_at', { ascending: false }),
-    supabase.from('tfi_count_lines').select('session_id'),
-  ]);
+  const sessionsRes = await supabase
+    .from('tfi_sessions')
+    .select('*')
+    .order('created_at', { ascending: false });
 
   if (sessionsRes.error) throw sessionsRes.error;
-  if (countsRes.error) throw countsRes.error;
+
+  // Contar líneas con paginación robusta (supera límite de 1000)
+  const allCounts = await fetchAllPages<{ session_id: string }>(
+    (from, to) => supabase.from('tfi_count_lines').select('session_id').range(from, to)
+  );
 
   // Construir mapa session_id -> total_lines contando registros
   const lineCountMap: Record<string, number> = {};
-  for (const row of (countsRes.data ?? [])) {
-    const sid = (row as { session_id: string }).session_id;
+  for (const row of allCounts) {
+    const sid = row.session_id;
     lineCountMap[sid] = (lineCountMap[sid] ?? 0) + 1;
   }
 
@@ -73,7 +105,7 @@ export async function getComparisonLines(
 ): Promise<TfiComparisonLine[]> {
   let query = supabase
     .from('v_tfi_comparison_lines')
-    .select('*')
+    .select(V_TFI_COMPARISON_LINES_COLUMNS)
     .order('article_id', { ascending: true });
 
   if (filters.session_id) {
@@ -107,6 +139,9 @@ export async function getComparisonLines(
       (l) => (l.difference_user_1 ?? 0) !== 0 || (l.difference_user_2 ?? 0) !== 0
     );
   }
+
+  // Filtro por situación (post-query porque puede matchear en 3 columnas distintas)
+  result = filterBySituation(result, filters.situation);
 
   return result;
 }
@@ -150,7 +185,7 @@ export async function getPendingRecount(
 ): Promise<TfiComparisonLine[]> {
   let query = supabase
     .from('v_tfi_comparison_lines')
-    .select('*')
+    .select(V_TFI_COMPARISON_LINES_COLUMNS)
     .eq('comparison_status', 'pending_recount')
     .order('article_id', { ascending: true });
 
@@ -166,9 +201,11 @@ export async function getPendingRecount(
 export async function getDashboardStats(
   sessionId?: string
 ): Promise<DashboardStats> {
+  // Usa getAllLinesForDashboardExport para traer TODAS las líneas (sin límite de 1000)
+  // y obtener conteos exactos de estados en el dashboard.
   const [global, lines] = await Promise.all([
     getGlobalPrecision(sessionId),
-    getComparisonLines(sessionId ? { session_id: sessionId } : {}),
+    getAllLinesForDashboardExport(sessionId),
   ]);
 
   const pendingRecount = lines.filter((l) => l.comparison_status === 'pending_recount').length;
@@ -215,7 +252,7 @@ export async function getAllComparisonLinesForExport(
   const buildQuery = (from: number, to: number) => {
     let q = supabase
       .from('v_tfi_comparison_lines')
-      .select('*')
+      .select(V_TFI_COMPARISON_LINES_COLUMNS)
       .order('article_id', { ascending: true })
       .range(from, to);
 
@@ -243,6 +280,9 @@ export async function getAllComparisonLinesForExport(
     );
   }
 
+  // Filtro por situación en export
+  result = filterBySituation(result, filters.situation);
+
   return result;
 }
 
@@ -252,7 +292,7 @@ export async function getAllPendingRecountForExport(
   const buildQuery = (from: number, to: number) => {
     let q = supabase
       .from('v_tfi_comparison_lines')
-      .select('*')
+      .select(V_TFI_COMPARISON_LINES_COLUMNS)
       .eq('comparison_status', 'pending_recount')
       .order('article_id', { ascending: true })
       .range(from, to);
@@ -287,7 +327,7 @@ export async function getAllLinesForDashboardExport(
   const buildQuery = (from: number, to: number) => {
     let q = supabase
       .from('v_tfi_comparison_lines')
-      .select('*')
+      .select(V_TFI_COMPARISON_LINES_COLUMNS)
       .order('article_id', { ascending: true })
       .range(from, to);
 
@@ -298,35 +338,283 @@ export async function getAllLinesForDashboardExport(
   return fetchAllPages<TfiComparisonLine>(buildQuery);
 }
 
+export async function getAllLinesForRanking(sessionId?: string): Promise<TfiComparisonLine[]> {
+  const buildQuery = (from: number, to: number) => {
+    let q = supabase
+      .from('v_tfi_comparison_lines')
+      .select(RANKING_COLUMNS)
+      .order('article_id', { ascending: true })
+      .range(from, to);
+
+    if (sessionId) q = q.eq('session_id', sessionId);
+    return q;
+  };
+
+  return fetchAllPages<TfiComparisonLine>(buildQuery);
+}
+
+function sortRankingByPrecisionAndVolume<T extends { precision: number; hasEnoughData: boolean }>(
+  list: T[]
+): T[] {
+  return list.sort((a, b) => {
+    if (a.hasEnoughData && !b.hasEnoughData) return -1;
+    if (!a.hasEnoughData && b.hasEnoughData) return 1;
+    return b.precision - a.precision;
+  });
+}
+
+export function calculateRankings(lines: TfiComparisonLine[]): RankingsBundle {
+  const countsMap = new Map<
+    string,
+    { total1: number; errors1: number; total2: number; errors2: number; name1: string | null; name2: string | null }
+  >();
+  const recountsMap = new Map<string, { total: number; errors: number }>();
+
+  for (const line of lines) {
+    // Conteo 1
+    if (line.user_1) {
+      const cur = countsMap.get(line.user_1) ?? { total1: 0, errors1: 0, total2: 0, errors2: 0, name1: null, name2: null };
+      cur.total1++;
+      if (line.difference_1_wms !== null && line.difference_1_wms !== 0) {
+        cur.errors1++;
+      }
+      if (!cur.name1 && line.take_1_name) {
+        cur.name1 = line.take_1_name;
+      }
+      countsMap.set(line.user_1, cur);
+    }
+
+    // Conteo 2
+    if (line.user_2) {
+      const cur = countsMap.get(line.user_2) ?? { total1: 0, errors1: 0, total2: 0, errors2: 0, name1: null, name2: null };
+      cur.total2++;
+      if (line.difference_2_wms !== null && line.difference_2_wms !== 0) {
+        cur.errors2++;
+      }
+      if (!cur.name2 && line.take_2_name) {
+        cur.name2 = line.take_2_name;
+      }
+      countsMap.set(line.user_2, cur);
+    }
+
+    // Reconteo (solo si hay qty real)
+    if (line.recount_user && line.recount_qty !== null) {
+      const cur = recountsMap.get(line.recount_user) ?? { total: 0, errors: 0 };
+      cur.total++;
+      if (line.recount_qty !== line.theoretical_qty) {
+        cur.errors++;
+      }
+      recountsMap.set(line.recount_user, cur);
+    }
+  }
+
+  // Helper para display_name en conteos
+  const getCountDisplayName = (userId: string): string => {
+    const data = countsMap.get(userId);
+    return data?.name1 ?? data?.name2 ?? userId;
+  };
+
+  // ── Ranking Conteos 1 y 2 ────────────────────────────────────────────────
+  const countsArr: UserRankingCounts[] = [];
+  for (const [user_name, data] of countsMap) {
+    const total_articulos = data.total1 + data.total2;
+    const total_errores = data.errors1 + data.errors2;
+    const precision = total_articulos > 0 ? ((total_articulos - total_errores) / total_articulos) * 100 : 0;
+    countsArr.push({
+      user_name,
+      display_name: getCountDisplayName(user_name),
+      total_conteo_1: data.total1,
+      errores_conteo_1: data.errors1,
+      total_conteo_2: data.total2,
+      errores_conteo_2: data.errors2,
+      total_articulos,
+      total_errores,
+      precision: Number(precision.toFixed(2)),
+      hasEnoughData: total_articulos >= 20,
+    });
+  }
+
+  // ── Ranking Reconteos ────────────────────────────────────────────────────
+  const recountsArr: UserRankingRecounts[] = [];
+  for (const [user_name, data] of recountsMap) {
+    const precision = data.total > 0 ? ((data.total - data.errors) / data.total) * 100 : 0;
+    recountsArr.push({
+      user_name,
+      display_name: user_name, // Por ahora no hay recount_user_name en la base
+      total_reconteos: data.total,
+      errores_reconteo: data.errors,
+      precision: Number(precision.toFixed(2)),
+      hasEnoughData: data.total >= 20,
+    });
+  }
+
+  // ── Ranking Global Ponderado ─────────────────────────────────────────────
+  // Unir todos los usuarios que aparezcan en counts o recounts
+  const allUsers = new Set([...countsMap.keys(), ...recountsMap.keys()]);
+  const globalArr: UserRankingGlobal[] = [];
+  for (const user_name of allUsers) {
+    const c = countsMap.get(user_name) ?? { total1: 0, errors1: 0, total2: 0, errors2: 0, name1: null, name2: null };
+    const r = recountsMap.get(user_name) ?? { total: 0, errors: 0 };
+
+    const total_conteos = c.total1 + c.total2;
+    const errores_conteos = c.errors1 + c.errors2;
+    const total_reconteos = r.total;
+    const errores_reconteo = r.errors;
+
+    const precision_conteos = total_conteos > 0 ? ((total_conteos - errores_conteos) / total_conteos) * 100 : 0;
+    const precision_reconteo = total_reconteos > 0 ? ((total_reconteos - errores_reconteo) / total_reconteos) * 100 : 0;
+
+    const total_general = total_conteos + total_reconteos;
+    const errores_general = errores_conteos + errores_reconteo;
+    const precision_global = total_general > 0 ? ((total_general - errores_general) / total_general) * 100 : 0;
+
+    globalArr.push({
+      user_name,
+      display_name: getCountDisplayName(user_name),
+      total_conteos,
+      errores_conteos,
+      total_reconteos,
+      errores_reconteo,
+      precision_conteos: Number(precision_conteos.toFixed(2)),
+      precision_reconteo: Number(precision_reconteo.toFixed(2)),
+      precision_global: Number(precision_global.toFixed(2)),
+      hasEnoughData: total_general >= 20,
+    });
+  }
+
+  return {
+    counts: sortRankingByPrecisionAndVolume(countsArr),
+    recounts: sortRankingByPrecisionAndVolume(recountsArr),
+    global: sortRankingByPrecisionAndVolume(globalArr),
+  };
+}
+
+export async function getRankingData(sessionId?: string): Promise<RankingsBundle> {
+  const lines = await getAllLinesForRanking(sessionId);
+  return calculateRankings(lines);
+}
+
 export async function getDistinctUsers(
   sessionId?: string
 ): Promise<{ users1: string[]; users2: string[] }> {
-  let query = supabase
-    .from('v_tfi_comparison_lines')
-    .select('user_1, user_2');
+  const buildQuery = (from: number, to: number) => {
+    let q = supabase
+      .from('v_tfi_comparison_lines')
+      .select('user_1, user_2')
+      .range(from, to);
 
-  if (sessionId) {
-    query = query.eq('session_id', sessionId);
-  }
+    if (sessionId) {
+      q = q.eq('session_id', sessionId);
+    }
+    return q;
+  };
 
-  const { data, error } = await query;
-  if (error) throw error;
+  const allData = await fetchAllPages<{ user_1: string | null; user_2: string | null }>(buildQuery);
 
   const users1 = [
     ...new Set(
-      (data ?? [])
-        .map((r: { user_1: string | null }) => r.user_1)
+      allData
+        .map((r) => r.user_1)
         .filter((u): u is string => Boolean(u))
     ),
   ].sort();
 
   const users2 = [
     ...new Set(
-      (data ?? [])
-        .map((r: { user_2: string | null }) => r.user_2)
+      allData
+        .map((r) => r.user_2)
         .filter((u): u is string => Boolean(u))
     ),
   ].sort();
 
   return { users1, users2 };
+}
+
+// ─── Situaciones disponibles para una sesión (dinámicas desde tfi_count_lines) ──
+export async function getAvailableSituations(sessionId: string): Promise<string[]> {
+  const buildQuery = (from: number, to: number) => {
+    return supabase
+      .from('tfi_count_lines')
+      .select('situation_1,situation_2,situation_recount')
+      .eq('session_id', sessionId)
+      .range(from, to);
+  };
+
+  const rows = await fetchAllPages<{
+    situation_1: string | null;
+    situation_2: string | null;
+    situation_recount: string | null;
+  }>(buildQuery);
+
+  const values = new Set<string>();
+  for (const row of rows) {
+    if (row.situation_1) values.add(row.situation_1.trim().toUpperCase());
+    if (row.situation_2) values.add(row.situation_2.trim().toUpperCase());
+    if (row.situation_recount) values.add(row.situation_recount.trim().toUpperCase());
+  }
+
+  // Siempre devolver TODOS primero, luego el resto ordenado alfabéticamente
+  const rest = Array.from(values).sort();
+  return ['TODOS', ...rest];
+}
+
+export async function getSyncRunById(syncRunId: string): Promise<TfiSyncRun | null> {
+  console.log('[Supabase] getSyncRunById — syncRunId:', syncRunId);
+
+  const { data, error } = await supabase
+    .from('tfi_sync_runs')
+    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
+    .eq('id', syncRunId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Supabase] getSyncRunById error:', error.message, error.details, error.hint);
+    throw error;
+  }
+
+  console.log('[Supabase] getSyncRunById resultado:', data);
+  return data as TfiSyncRun | null;
+}
+
+// Busca específicamente un sync en estado 'running' para una sesión.
+// Devuelve null si no hay ninguno activo.
+export async function getRunningSyncForSession(sessionId: string): Promise<TfiSyncRun | null> {
+  console.log('[Supabase] getRunningSyncForSession — sessionId:', sessionId);
+
+  const { data, error } = await supabase
+    .from('tfi_sync_runs')
+    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
+    .eq('session_id', sessionId)
+    .eq('status', 'running')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Supabase] getRunningSyncForSession error:', error.message, error.details, error.hint);
+    throw error;
+  }
+
+  console.log('[Supabase] getRunningSyncForSession resultado:', data);
+  return data as TfiSyncRun | null;
+}
+
+export async function getLatestSyncRun(sessionId: string): Promise<TfiSyncRun | null> {
+  console.log('[Supabase] getLatestSyncRun — sessionId:', sessionId);
+
+  const { data, error } = await supabase
+    .from('tfi_sync_runs')
+    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
+    .eq('session_id', sessionId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Supabase] getLatestSyncRun error:', error.message, error.details, error.hint);
+    throw error;
+  }
+
+  console.log('[Supabase] getLatestSyncRun resultado:', data);
+  return data as TfiSyncRun | null;
 }

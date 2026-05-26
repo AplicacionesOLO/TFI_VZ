@@ -1,10 +1,11 @@
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
-import type { TfiComparisonLine, TfiUserPrecision, TfiSession, DashboardStats } from '@/types/tfi.types';
+import type { TfiComparisonLine, TfiUserPrecision, TfiSession, DashboardStats, UserRankingCounts, UserRankingRecounts, UserRankingGlobal } from '@/types/tfi.types';
 import {
   sanitizeFilename,
   todayStr,
   precisionLevel,
+  rankingLevel,
   fmtNum,
   calcDiffTemp,
   applyAutoWidth,
@@ -59,6 +60,12 @@ const COMPARISON_HEADER: CellValue[] = [
   'Estado',
   'Conteo final',
   'Diferencia final vs teórico',
+  'Situación toma 1',
+  'Situación toma 2',
+  'Situación reconteo',
+  'Estado formulario toma 1',
+  'Estado formulario toma 2',
+  'Estado formulario reconteo',
 ];
 
 function comparisonRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
@@ -80,6 +87,12 @@ function comparisonRow(l: TfiComparisonLine, sessionNameMap: Record<string, stri
     translateStatus(l.comparison_status),
     fmtNum(l.final_count_qty),
     fmtNum(l.final_difference_vs_theoretical),
+    l.situation_1 ?? '-',
+    l.situation_2 ?? '-',
+    l.situation_recount ?? '-',
+    l.estado_formulario_1 ?? '-',
+    l.estado_formulario_2 ?? '-',
+    l.estado_formulario_recount ?? '-',
   ];
 }
 
@@ -96,6 +109,12 @@ const PENDING_HEADER: CellValue[] = [
   'Usuario toma 2',
   'Estado',
   'Diferencia temporal',
+  'Situación toma 1',
+  'Situación toma 2',
+  'Situación reconteo',
+  'Estado formulario toma 1',
+  'Estado formulario toma 2',
+  'Estado formulario reconteo',
 ];
 
 function pendingRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>): CellValue[] {
@@ -110,10 +129,16 @@ function pendingRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>
     l.user_2 ?? '-',
     translateStatus(l.comparison_status),
     calcDiffTemp(l.count_1_qty, l.count_2_qty),
+    l.situation_1 ?? '-',
+    l.situation_2 ?? '-',
+    l.situation_recount ?? '-',
+    l.estado_formulario_1 ?? '-',
+    l.estado_formulario_2 ?? '-',
+    l.estado_formulario_recount ?? '-',
   ];
 }
 
-// ─── Filas de ranking (reutilizado en Ranking y Resumen Ejecutivo) ────────────
+// ─── Filas de ranking LEGADO (reutilizado en Ranking y Resumen Ejecutivo) ────────────
 
 const RANKING_HEADER: CellValue[] = [
   'Posición',
@@ -134,6 +159,94 @@ function rankingRow(u: TfiUserPrecision, pos: number, sessionNameMap: Record<str
     Number(u.differences),
     Number(Number(u.precision_percentage).toFixed(2)),
     precisionLevel(Number(u.precision_percentage)),
+  ];
+}
+
+// ─── Ranking Conteos 1 y 2 ──────────────────────────────────────────────────
+
+const RANKING_COUNTS_HEADER: CellValue[] = [
+  'Posición',
+  'Nombre',
+  'Ficha/ID',
+  'Conteo 1',
+  'Errores C1',
+  'Conteo 2',
+  'Errores C2',
+  'Total artículos',
+  'Total errores',
+  '% Precisión',
+  'Nivel',
+];
+
+function rankingCountsRow(u: UserRankingCounts, pos: number): CellValue[] {
+  return [
+    pos,
+    u.display_name,
+    u.user_name,
+    u.total_conteo_1,
+    u.errores_conteo_1,
+    u.total_conteo_2,
+    u.errores_conteo_2,
+    u.total_articulos,
+    u.total_errores,
+    Number(u.precision.toFixed(2)),
+    rankingLevel(u.precision, u.hasEnoughData),
+  ];
+}
+
+// ─── Ranking Reconteos ──────────────────────────────────────────────────────
+
+const RANKING_RECOUNTS_HEADER: CellValue[] = [
+  'Posición',
+  'Nombre',
+  'Ficha/ID',
+  'Total reconteos',
+  'Errores reconteo',
+  '% Precisión reconteo',
+  'Nivel',
+];
+
+function rankingRecountsRow(u: UserRankingRecounts, pos: number): CellValue[] {
+  return [
+    pos,
+    u.display_name,
+    u.user_name,
+    u.total_reconteos,
+    u.errores_reconteo,
+    Number(u.precision.toFixed(2)),
+    rankingLevel(u.precision, u.hasEnoughData),
+  ];
+}
+
+// ─── Ranking Global Ponderado ───────────────────────────────────────────────
+
+const RANKING_GLOBAL_HEADER: CellValue[] = [
+  'Posición',
+  'Nombre',
+  'Ficha/ID',
+  'Total conteos',
+  'Errores conteos',
+  'Total reconteos',
+  'Errores reconteo',
+  '% Precisión conteos',
+  '% Precisión reconteo',
+  '% Precisión global',
+  'Nivel',
+];
+
+function rankingGlobalRow(u: UserRankingGlobal, pos: number): CellValue[] {
+  return [
+    pos,
+    u.display_name,
+    u.user_name,
+    u.total_conteos,
+    u.errores_conteos,
+    u.total_reconteos,
+    u.errores_reconteo,
+    Number(u.precision_conteos.toFixed(2)),
+    Number(u.precision_reconteo.toFixed(2)),
+    Number(u.precision_global.toFixed(2)),
+    rankingLevel(u.precision_global, u.hasEnoughData),
   ];
 }
 
@@ -163,7 +276,7 @@ export function exportComparisonToExcel(
   writeFile(wb, `TFI_COMPARACION_${safe}_${todayStr()}.xlsx`);
 }
 
-// ─── Ranking de Usuarios ─────────────────────────────────────────────────────
+// ─── Ranking de Usuarios LEGADO ─────────────────────────────────────────────
 // Agrega columna "Posición" según el orden visible (ya ordenado por el servicio).
 
 export function exportRankingToExcel(
@@ -177,6 +290,48 @@ export function exportRankingToExcel(
   const wb = buildWorkbook([{ name: 'Ranking', data }]);
   const safe = sanitizeFilename(sessionName);
   writeFile(wb, `TFI_RANKING_${safe}_${todayStr()}.xlsx`);
+}
+
+// ─── Ranking Conteos 1 y 2 ──────────────────────────────────────────────────
+
+export function exportRankingCountsToExcel(
+  users: UserRankingCounts[],
+  sessionName: string
+): void {
+  const rows: AoA = users.map((u, i) => rankingCountsRow(u, i + 1));
+  const data: AoA = [RANKING_COUNTS_HEADER, ...rows];
+
+  const wb = buildWorkbook([{ name: 'Conteos 1 y 2', data }]);
+  const safe = sanitizeFilename(sessionName);
+  writeFile(wb, `TFI_RANKING_CONTEOS_${safe}_${todayStr()}.xlsx`);
+}
+
+// ─── Ranking Reconteos ──────────────────────────────────────────────────────
+
+export function exportRankingRecountsToExcel(
+  users: UserRankingRecounts[],
+  sessionName: string
+): void {
+  const rows: AoA = users.map((u, i) => rankingRecountsRow(u, i + 1));
+  const data: AoA = [RANKING_RECOUNTS_HEADER, ...rows];
+
+  const wb = buildWorkbook([{ name: 'Reconteos', data }]);
+  const safe = sanitizeFilename(sessionName);
+  writeFile(wb, `TFI_RANKING_RECONTEOS_${safe}_${todayStr()}.xlsx`);
+}
+
+// ─── Ranking Global Ponderado ───────────────────────────────────────────────
+
+export function exportRankingGlobalToExcel(
+  users: UserRankingGlobal[],
+  sessionName: string
+): void {
+  const rows: AoA = users.map((u, i) => rankingGlobalRow(u, i + 1));
+  const data: AoA = [RANKING_GLOBAL_HEADER, ...rows];
+
+  const wb = buildWorkbook([{ name: 'Global', data }]);
+  const safe = sanitizeFilename(sessionName);
+  writeFile(wb, `TFI_RANKING_GLOBAL_${safe}_${todayStr()}.xlsx`);
 }
 
 // ─── Pendientes de Reconteo ──────────────────────────────────────────────────
