@@ -8,6 +8,7 @@ import type {
   ComparisonFilters,
   DashboardStats,
   TfiSyncRun,
+  TfiSyncLock,
   RankingsBundle,
   UserRankingCounts,
   UserRankingRecounts,
@@ -617,4 +618,71 @@ export async function getLatestSyncRun(sessionId: string): Promise<TfiSyncRun | 
 
   console.log('[Supabase] getLatestSyncRun resultado:', data);
   return data as TfiSyncRun | null;
+}
+
+// ─── Sync Lock Functions ────────────────────────────────────────────────────
+
+export async function acquireSyncLock(sessionId: string, syncRunId: string): Promise<boolean> {
+  console.log('[SyncLock] acquireSyncLock — sessionId:', sessionId, 'syncRunId:', syncRunId);
+
+  const { data, error } = await supabase.rpc('acquire_tfi_sync_lock', {
+    p_session_id: sessionId,
+    p_sync_run_id: syncRunId,
+  });
+
+  if (error) {
+    console.error('[SyncLock] acquireSyncLock error:', error.message, error.details, error.hint);
+    throw error;
+  }
+
+  console.log('[SyncLock] acquireSyncLock resultado:', data);
+  return (data as boolean) ?? false;
+}
+
+export async function releaseSyncLock(sessionId: string, errorMsg?: string): Promise<void> {
+  console.log('[SyncLock] releaseSyncLock — sessionId:', sessionId, 'error:', errorMsg ?? 'none');
+
+  const { error } = await supabase.rpc('release_tfi_sync_lock', {
+    p_session_id: sessionId,
+    p_error: errorMsg ?? null,
+  });
+
+  if (error) {
+    console.error('[SyncLock] releaseSyncLock error:', error.message, error.details, error.hint);
+    throw error;
+  }
+
+  console.log('[SyncLock] releaseSyncLock — liberado');
+}
+
+export async function getSyncLocks(): Promise<TfiSyncLock[]> {
+  const { data, error } = await supabase
+    .from('tfi_sync_locks')
+    .select('*');
+
+  if (error) {
+    console.error('[SyncLock] getSyncLocks error:', error.message);
+    throw error;
+  }
+
+  console.log('[SyncLock] getSyncLocks:', data?.length ?? 0, 'locks encontrados');
+  return (data ?? []) as TfiSyncLock[];
+}
+
+export async function getSyncLock(sessionId: string): Promise<TfiSyncLock | null> {
+  console.log('[SyncLock] getSyncLock — sessionId:', sessionId);
+
+  const { data, error } = await supabase
+    .from('tfi_sync_locks')
+    .select('*')
+    .eq('session_id', sessionId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[SyncLock] getSyncLock error:', error.message);
+    throw error;
+  }
+
+  console.log('[SyncLock] getSyncLock resultado:', data);
+  return data as TfiSyncLock | null;
 }

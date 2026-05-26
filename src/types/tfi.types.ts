@@ -176,3 +176,14 @@ export interface TfiSyncRun {
   total_rows: number | null;
   error_message: string | null;
 }
+
+export interface TfiSyncLock {
+  session_id: string;
+  is_running: boolean;
+  sync_run_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+  locked_by: string | null;
+  error_message: string | null;
+}
