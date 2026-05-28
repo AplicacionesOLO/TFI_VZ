@@ -62,7 +62,7 @@ async function fetchAllPages<T>(
 }
 
 export async function getSessions(): Promise<TfiSessionWithCount[]> {
-  // Trae sesiones y el conteo real de líneas desde tfi_count_lines en paralelo
+  // Trae sesiones y conteos reales desde tfi_count_lines y tfi_count_attempts en paralelo
   const sessionsRes = await supabase
     .from('tfi_sessions')
     .select('*')
@@ -70,30 +70,44 @@ export async function getSessions(): Promise<TfiSessionWithCount[]> {
 
   if (sessionsRes.error) throw sessionsRes.error;
 
-  // Contar líneas con paginación robusta (supera límite de 1000)
+  // Contar líneas de tfi_count_lines con paginación robusta
   const allCounts = await fetchAllPages<{ session_id: string }>(
     (from, to) => supabase.from('tfi_count_lines').select('session_id').range(from, to)
   );
 
-  // Construir mapa session_id -> total_lines contando registros
+  // Construir mapa session_id -> total_lines
   const lineCountMap: Record<string, number> = {};
   for (const row of allCounts) {
     const sid = row.session_id;
     lineCountMap[sid] = (lineCountMap[sid] ?? 0) + 1;
   }
 
+  // Contar líneas de tfi_count_attempts (para V2) con paginación robusta
+  const allAttempts = await fetchAllPages<{ session_id: string }>(
+    (from, to) => supabase.from('tfi_count_attempts').select('session_id').range(from, to)
+  );
+
+  const attemptCountMap: Record<string, number> = {};
+  for (const row of allAttempts) {
+    const sid = row.session_id;
+    attemptCountMap[sid] = (attemptCountMap[sid] ?? 0) + 1;
+  }
+
   const sessions = (sessionsRes.data ?? []) as TfiSession[];
 
-  // Enriquecer con total_lines y ordenar: con datos primero, sin datos al final
+  // Enriquecer con ambos conteos y ordenar: con datos primero, sin datos al final
   const enriched: TfiSessionWithCount[] = sessions.map((s) => ({
     ...s,
     total_lines: lineCountMap[s.id] ?? 0,
+    attempt_lines: attemptCountMap[s.id] ?? 0,
   }));
 
   enriched.sort((a, b) => {
-    // Primero las que tienen datos, luego sin datos
-    if (a.total_lines > 0 && b.total_lines === 0) return -1;
-    if (a.total_lines === 0 && b.total_lines > 0) return 1;
+    // Primero las que tienen datos en cualquiera de las dos tablas
+    const aHasData = a.total_lines > 0 || a.attempt_lines > 0;
+    const bHasData = b.total_lines > 0 || b.attempt_lines > 0;
+    if (aHasData && !bHasData) return -1;
+    if (!aHasData && bHasData) return 1;
     // Dentro de cada grupo, más reciente primero
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });

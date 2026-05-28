@@ -5,7 +5,7 @@ import TfiRefreshControl from './TfiRefreshControl';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: 'ri-dashboard-3-line' },
-  { label: 'Comparación', path: '/comparison', icon: 'ri-file-list-3-line' },
+  { label: 'Comparación', path: '/comparison-v2', icon: 'ri-arrow-left-right-line' },
   { label: 'Ranking', path: '/ranking', icon: 'ri-medal-line' },
   { label: 'Pendientes', path: '/pending', icon: 'ri-time-line' },
 ];
@@ -15,10 +15,12 @@ function formatLineCount(count: number): string {
   return count.toLocaleString('es-AR') + ' líneas';
 }
 
-function sessionLabel(name: string, location: string | null, totalLines: number): string {
+function sessionLabel(name: string, location: string | null, totalLines: number, attemptLines: number): string {
   const loc = location ? ` — ${location}` : '';
-  const cnt = ` — ${formatLineCount(totalLines)}`;
-  return `${name}${loc}${cnt}`;
+  const hasData = totalLines > 0 || attemptLines > 0;
+  if (!hasData) return `${name}${loc} — sin datos`;
+  const cnt = totalLines > 0 ? formatLineCount(totalLines) : formatLineCount(attemptLines);
+  return `${name}${loc} — ${cnt}`;
 }
 
 export default function TopNav() {
@@ -45,7 +47,7 @@ export default function TopNav() {
   const visibleSessions = useMemo(
     () => {
       const filtered = sessions.filter((s) => !excludedSessionNames.has(s.name));
-      return hideEmpty ? filtered.filter((s) => s.total_lines > 0) : filtered;
+      return hideEmpty ? filtered.filter((s) => s.total_lines > 0 || s.attempt_lines > 0) : filtered;
     },
     [sessions, hideEmpty, excludedSessionNames]
   );
@@ -60,7 +62,7 @@ export default function TopNav() {
     }
   }, [visibleSessions, selectedSession, setSelectedSession]);
 
-  const emptySessions = sessions.filter((s) => s.total_lines === 0 && !excludedSessionNames.has(s.name));
+  const emptySessions = sessions.filter((s) => s.total_lines === 0 && s.attempt_lines === 0 && !excludedSessionNames.has(s.name));
 
   return (
     <header
@@ -129,10 +131,10 @@ export default function TopNav() {
                     <option
                       key={s.id}
                       value={s.id}
-                      disabled={s.total_lines === 0}
-                      style={s.total_lines === 0 ? { color: '#9ca3af' } : undefined}
+                      disabled={s.total_lines === 0 && s.attempt_lines === 0}
+                      style={s.total_lines === 0 && s.attempt_lines === 0 ? { color: '#9ca3af' } : undefined}
                     >
-                      {sessionLabel(s.name, s.location, s.total_lines)}
+                      {sessionLabel(s.name, s.location, s.total_lines, s.attempt_lines)}
                     </option>
                   ))}
                 </select>
@@ -187,10 +189,10 @@ export default function TopNav() {
                     <option
                       key={s.id}
                       value={s.id}
-                      disabled={s.total_lines === 0}
-                      style={s.total_lines === 0 ? { color: '#9ca3af' } : undefined}
+                      disabled={s.total_lines === 0 && s.attempt_lines === 0}
+                      style={s.total_lines === 0 && s.attempt_lines === 0 ? { color: '#9ca3af' } : undefined}
                     >
-                      {sessionLabel(s.name, s.location, s.total_lines)}
+                      {sessionLabel(s.name, s.location, s.total_lines, s.attempt_lines)}
                     </option>
                   ))}
                 </select>

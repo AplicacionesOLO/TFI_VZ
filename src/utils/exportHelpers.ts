@@ -118,3 +118,15 @@ export function applyAutoWidth(ws: XLSX.WorkSheet): void {
 
   ws['!cols'] = colWidths.map((w) => ({ wch: w }));
 }
+
+/**
+ * Calcula el nivel TFI según los rangos oficiales para Ranking V2.
+ * Retorna label (ÓPTIMO/BUENO/POR MEJORAR) y reconocimiento (Oro/Plata/-).
+ */
+export function rankingLevelV2(pct: number): { label: string; reconocimiento: string } {
+  const n = Number(pct);
+  if (isNaN(n)) return { label: 'POR MEJORAR', reconocimiento: '-' };
+  if (n >= 98.01) return { label: 'ÓPTIMO', reconocimiento: 'Oro' };
+  if (n >= 93) return { label: 'BUENO', reconocimiento: 'Plata' };
+  return { label: 'POR MEJORAR', reconocimiento: '-' };
+}

@@ -1,9 +1,11 @@
-import type { TfiComparisonLine, TfiUserPrecision, TfiSession, DashboardStats, UserRankingCounts, UserRankingRecounts, UserRankingGlobal } from '@/types/tfi.types';
+import type { TfiComparisonLine, TfiUserPrecision, TfiSession, DashboardStats, UserRankingCounts, UserRankingRecounts, UserRankingGlobal, UserRankingV2, DashboardV2Stats } from '@/types/tfi.types';
+import type { ComparisonV2Line } from '@/types/comparison-v2.types';
 import {
   sanitizeFilename,
   todayStr,
   precisionLevel,
   rankingLevel,
+  rankingLevelV2,
   fmtNum,
   fmtPct,
   calcDiffTemp,
@@ -249,6 +251,49 @@ function pendingRow(l: TfiComparisonLine, sessionNameMap: Record<string, string>
 // ─── Comparación T1 vs T2 ────────────────────────────────────────────────────
 // Exporta exactamente las líneas visibles (ya filtradas en el componente).
 
+export function exportDashboardV2ToCsv(
+  stats: DashboardV2Stats,
+  session: TfiSession | null
+): void {
+  const sessionLabel = session
+    ? session.location
+      ? `${session.name} — ${session.location}`
+      : session.name
+    : 'Sin sesión';
+
+  const rows: CellValue[][] = [
+    ['Campo', 'Valor'],
+    ['Sesión', sessionLabel],
+    ['Total conteos', fmtNum(stats.total_conteos)],
+    ['Total artículos', fmtNum(stats.total_articulos)],
+    ['Total ubicaciones', fmtNum(stats.total_ubicaciones)],
+    ['Total usuarios', fmtNum(stats.total_usuarios)],
+    ['Total tomas', fmtNum(stats.total_tomas)],
+    ['Conteos exactos', fmtNum(stats.conteos_exactos)],
+    ['Conteos con diferencia', fmtNum(stats.conteos_con_diferencia)],
+    ['Precisión global', fmtPct(stats.precision_global)],
+    ['Diferencia absoluta total', fmtNum(stats.diferencia_absoluta_total)],
+    ['Tomas NORMAL', fmtNum(stats.tomas_normal)],
+    ['Tomas RECONTEO', fmtNum(stats.tomas_reconteo)],
+    ['Artículos sin diferencia', fmtNum(stats.articulos_sin_diferencia)],
+    ['Artículos con diferencia', fmtNum(stats.articulos_con_diferencia)],
+    ['Conteos faltantes', fmtNum(stats.conteos_faltantes)],
+    [],
+    ['--- Distribución por tipo ---'],
+    ['Tipo', 'Total', 'Porcentaje'],
+    ['NORMAL', stats.tomas_normal, fmtPct((stats.tomas_normal / stats.total_conteos) * 100)],
+    ['RECONTEO', stats.tomas_reconteo, fmtPct((stats.tomas_reconteo / stats.total_conteos) * 100)],
+    [],
+    ['--- Distribución por artículo ---'],
+    ['Estado', 'Total', 'Porcentaje'],
+    ['Sin diferencia', stats.articulos_sin_diferencia, fmtPct((stats.articulos_sin_diferencia / stats.total_articulos) * 100)],
+    ['Con diferencia', stats.articulos_con_diferencia, fmtPct((stats.articulos_con_diferencia / stats.total_articulos) * 100)],
+  ];
+
+  const safeName = sanitizeFilename(session?.name ?? 'sesion');
+  downloadCsv(toCsvString(rows), `TFI_RESUMEN_V2_${safeName}_${todayStr()}.csv`);
+}
+
 export function exportComparisonToCsv(
   lines: TfiComparisonLine[],
   sessionName: string,
@@ -303,6 +348,51 @@ export function exportRankingGlobalToCsv(
   const rows = users.map((u, i) => rankingGlobalRow(u, i + 1));
   const safe = sanitizeFilename(sessionName);
   downloadCsv(toCsvString([RANKING_GLOBAL_HEADER, ...rows]), `TFI_RANKING_GLOBAL_${safe}_${todayStr()}.csv`);
+}
+
+// ─── Ranking V2 (Arquitectura Normalizada) ─────────────────────────────────
+
+const RANKING_V2_HEADER: CellValue[] = [
+  'Posición',
+  'Ficha/ID',
+  'Artículos contados',
+  'Ubicaciones',
+  'Total conteos',
+  'Conteos exactos',
+  'Conteos con diferencia',
+  'Diferencia absoluta total',
+  '% Precisión',
+  'Nivel Indicador',
+  'Reconocimiento',
+];
+
+function rankingV2Row(u: UserRankingV2, pos: number): CellValue[] {
+  const precision = Number(u.precision_porcentaje);
+  const nivel = rankingLevelV2(precision);
+  return [
+    pos,
+    u.user_id,
+    u.total_articulos_contados,
+    u.total_ubicaciones,
+    u.total_conteos,
+    u.conteos_exactos,
+    u.conteos_con_diferencia,
+    Number(u.diferencia_absoluta_total),
+    fmtPct(u.precision_porcentaje),
+    nivel.label,
+    nivel.reconocimiento,
+  ];
+}
+
+export function exportRankingV2ToCsv(
+  users: UserRankingV2[],
+  sessionName: string,
+  tabLabel: string,
+): void {
+  const rows = users.map((u, i) => rankingV2Row(u, i + 1));
+  const safe = sanitizeFilename(sessionName);
+  const safeTab = sanitizeFilename(tabLabel.replace(/\s+/g, '_'));
+  downloadCsv(toCsvString([RANKING_V2_HEADER, ...rows]), `TFI_RANKING_V2_${safeTab}_${safe}_${todayStr()}.csv`);
 }
 
 // ─── Pendientes de Reconteo ──────────────────────────────────────────────────
@@ -364,4 +454,67 @@ export function exportDashboardToCsv(
 
   const safeName = sanitizeFilename(session?.name ?? 'sesion');
   downloadCsv(toCsvString(rows), `TFI_RESUMEN_EJECUTIVO_${safeName}_${todayStr()}.csv`);
+}
+
+// ─── Comparación V2 (Arquitectura Normalizada) ────────────────────────────
+
+const COMPARISON_V2_HEADER: CellValue[] = [
+  'Artículo',
+  'Descripción',
+  'Ubicación A',
+  'Ubicación B',
+  'Teórico',
+  'Nombre Toma A',
+  'Conteo Toma A',
+  'Usuario Toma A',
+  'Nombre Toma B',
+  'Conteo Toma B',
+  'Usuario Toma B',
+  'Reconteo',
+  'Usuario Reconteo',
+  'Nombre Reconteo',
+  'Estado',
+  'Dif. Final',
+];
+
+function comparisonV2Row(l: ComparisonV2Line): CellValue[] {
+  const statusLabels: Record<string, string> = {
+    MATCH: 'MATCH',
+    DIFFERENT: 'DIFFERENT',
+    PENDING_RECOUNT: 'PEND. RECONTEO',
+    RECOUNT_MATCH_A: 'REC. MATCH A',
+    RECOUNT_MATCH_B: 'REC. MATCH B',
+    ALL_DIFFERENT: 'TODOS DIFF.',
+    PENDING_TAKE_A: 'PEND. TOMA A',
+    PENDING_TAKE_B: 'PEND. TOMA B',
+    NO_DATA: 'SIN DATOS',
+  };
+  return [
+    l.article_id,
+    l.article_description ?? '-',
+    l.location_id ?? '-',
+    l.location_b_id ?? '-',
+    fmtNum(l.theoretical_qty),
+    l.take_a_name,
+    fmtNum(l.take_a_qty),
+    l.take_a_user ?? '-',
+    l.take_b_name,
+    fmtNum(l.take_b_qty),
+    l.take_b_user ?? '-',
+    fmtNum(l.recount_qty),
+    l.recount_user ?? '-',
+    l.recount_name ?? '-',
+    statusLabels[l.comparison_status] ?? l.comparison_status,
+    fmtNum(l.final_difference),
+  ];
+}
+
+export function exportComparisonV2ToCsv(
+  lines: ComparisonV2Line[],
+  title: string,
+  sessionName: string,
+): void {
+  const rows = lines.map((l) => comparisonV2Row(l));
+  const safe = sanitizeFilename(sessionName);
+  downloadCsv(toCsvString([COMPARISON_V2_HEADER, ...rows]), `TFI_COMPARACION_V2_${safe}_${todayStr()}.csv`);
 }

@@ -24,6 +24,7 @@ export interface TfiSession {
 // TfiSession enriquecida con conteo de líneas reales de tfi_count_lines
 export interface TfiSessionWithCount extends TfiSession {
   total_lines: number;
+  attempt_lines: number;
 }
 
 export interface TfiComparisonLine {
@@ -116,6 +117,28 @@ export interface RankingsBundle {
 
 // ─── Fin nuevos tipos ───────────────────────────────────────────────────────
 
+// ─── Tipos V2 para ranking basado en tfi_count_attempts ──────────────────
+
+export type RankingV2Type = 'normal' | 'recount' | 'global';
+
+export interface UserRankingV2 {
+  user_id: string;
+  total_articulos_contados: number;
+  total_ubicaciones: number;
+  total_conteos: number;
+  conteos_exactos: number;
+  conteos_con_diferencia: number;
+  diferencia_absoluta_total: number;
+  precision_porcentaje: number;
+}
+
+export interface RankingV2Filters {
+  session_id: string;
+  take_names?: string[];
+  take_type?: string;
+  user_search?: string;
+}
+
 export interface TfiGlobalPrecision {
   session_id: string;
   total_user_counts: number;
@@ -155,6 +178,39 @@ export interface DashboardStats {
   recentDiffs: TfiComparisonLine[];
 }
 
+export interface DashboardV2Stats {
+  total_conteos: number;
+  total_articulos: number;
+  total_ubicaciones: number;
+  total_usuarios: number;
+  total_tomas: number;
+  conteos_exactos: number;
+  conteos_con_diferencia: number;
+  precision_global: number;
+  diferencia_absoluta_total: number;
+  tomas_normal: number;
+  tomas_reconteo: number;
+  articulos_con_diferencia: number;
+  articulos_sin_diferencia: number;
+  conteos_faltantes: number;
+}
+
+export interface DashboardV2Diff {
+  article_id: string;
+  article_description: string | null;
+  total_conteos: number;
+  exactos: number;
+  con_diferencia: number;
+  max_difference: number;
+  ubicaciones: number;
+  tomas_normal: number;
+  tomas_reconteo: number;
+  last_user: string | null;
+  last_take_name: string | null;
+  last_take_type: string | null;
+  theoretical_qty: number;
+}
+
 export interface N8nRefreshPayload {
   session_id: string;
   session_name: string;
@@ -167,7 +223,7 @@ export interface N8nRefreshPayload {
 }
 
 export interface TfiSyncRun {
-  id: number;
+  id: string;
   session_id: string;
   situation: string | null;
   status: 'running' | 'completed' | 'failed' | string;

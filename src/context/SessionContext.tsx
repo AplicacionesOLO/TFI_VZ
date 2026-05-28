@@ -44,8 +44,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setSessions(data);
         if (data.length > 0) {
           const visible = data.filter((s) => !EXCLUDED_SESSION_NAMES.includes(s.name));
-          // 1. Primera sesión activa (open/reviewing/active) con datos reales (total_lines > 0)
-          const activeWithData = visible.find((s) => isSessionActive(s.status) && s.total_lines > 0);
+          // 1. Primera sesión activa (open/reviewing/active) con datos reales (en cualquiera de las dos tablas)
+          const activeWithData = visible.find((s) => isSessionActive(s.status) && (s.total_lines > 0 || s.attempt_lines > 0));
           // 2. Fallback: primera sesión activa (sin datos)
           const activeAny = visible.find((s) => isSessionActive(s.status));
           // 3. Último fallback: primera de la lista visible

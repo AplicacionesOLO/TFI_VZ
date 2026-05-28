@@ -7,6 +7,7 @@ import {
   getSyncLocks,
   getRunningSyncForSession,
   getLatestSyncRun,
+  getSyncLock,
 } from '@/services/tfi.service';
 import type { TfiSyncRun } from '@/types/tfi.types';
 
@@ -45,6 +46,7 @@ interface Toast {
 const POLL_INTERVAL_MS = 3000;
 const STALE_THRESHOLD_MINUTES = 60;
 const ORPHAN_THRESHOLD_SECONDS = 300; // 5 minutos: si n8n no creó registros en este tiempo, es huérfano
+const ZOMBIE_SYNC_RUN_MINUTES = 5; // Si un sync run lleva > 5 min en 'running' sin finished_at, está muerto
 const SUCCESS_DISPLAY_MS = 4000;
 const ERROR_DISPLAY_MS = 6000;
 
@@ -131,6 +133,14 @@ function buildInitialState(): Record<string, WarehouseSyncState> {
     };
   }
   return state;
+}
+
+function isLockInconsistent(lock: import('@/types/tfi.types').TfiSyncLock): boolean {
+  // Lock con is_running=true pero finished_at seteado → inconsistente
+  if (lock.is_running && lock.finished_at != null) return true;
+  // Lock con is_running=true pero sync_run_id nulo → inconsistente
+  if (lock.is_running && lock.sync_run_id == null) return true;
+  return false;
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
@@ -223,8 +233,50 @@ export default function WarehouseSyncButtons() {
           const runningSync: TfiSyncRun | null = await getRunningSyncForSession(sessionId);
 
           if (runningSync) {
-            // Aún está corriendo — seguimos esperando
-            console.log(`[Poll] ${warehouseName} sigue running...`);
+            // Verificar si el sync run es zombie (n8n lo creó pero nunca lo actualizó)
+            const runningMinutes = runningSync.started_at
+              ? (Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60
+              : 0;
+
+            if (runningMinutes >= ZOMBIE_SYNC_RUN_MINUTES) {
+              // Sync run zombie detectado — n8n murió sin actualizar estado
+              console.log(
+                `[Poll] ${warehouseName} — sync run zombie (${Math.round(runningMinutes)}min en 'running'), liberando`
+              );
+              clearTimers(warehouseId);
+              await releaseSyncLock(
+                sessionId,
+                `Sync run zombie — ${Math.round(runningMinutes)}min en 'running' sin finalizar`
+              ).catch(() => {});
+              if (!mountedRef.current) return;
+
+              setSyncStates((prev) => ({
+                ...prev,
+                [warehouseId]: {
+                  ...prev[warehouseId],
+                  status: 'error',
+                  error: `n8n no respondió después de ${Math.round(runningMinutes)}min — lock liberado`,
+                },
+              }));
+
+              showToast(
+                `Sincronización de ${warehouseName} no respondió (${Math.round(runningMinutes)}min) — lock liberado`,
+                'warning'
+              );
+
+              setTimeout(() => {
+                if (!mountedRef.current) return;
+                setSyncStates((prev) => ({
+                  ...prev,
+                  [warehouseId]: { ...buildInitialState()[warehouseId] },
+                }));
+              }, ERROR_DISPLAY_MS);
+
+              return;
+            }
+
+            // Aún está corriendo y no es zombie — seguimos esperando
+            console.log(`[Poll] ${warehouseName} sigue running... (${Math.round(runningMinutes)}min)`);
             return;
           }
 
@@ -352,11 +404,66 @@ export default function WarehouseSyncButtons() {
         if (!mountedRef.current || recoveryDoneRef.current) return;
         recoveryDoneRef.current = true;
 
-        for (const lock of locks) {
+        // ── PRIMERO: liberar sync runs zombies sin lock (más importante) ──
+        for (const wh of WAREHOUSES) {
+          const runningSync = await getRunningSyncForSession(wh.sessionId).catch(() => null);
+          if (!runningSync) continue;
+
+          const runningMinutes = runningSync.started_at
+            ? (Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60
+            : 0;
+
+          if (runningMinutes >= ZOMBIE_SYNC_RUN_MINUTES) {
+            // Verificar si hay lock asociado
+            const lock = locks.find((l) => l.session_id === wh.sessionId);
+            if (!lock || !lock.is_running) {
+              // Sync run zombie SIN lock — el peor caso. Liberar automáticamente.
+              console.log(
+                `[Recovery] ${wh.name} — sync run zombie SIN LOCK (${Math.round(runningMinutes)}min en 'running'), liberando automáticamente`
+              );
+              await releaseSyncLock(
+                wh.sessionId,
+                `Sync run zombie sin lock — ${Math.round(runningMinutes)}min en 'running' sin finalizar`
+              ).catch(() => {});
+              // Resetear estado UI
+              setSyncStates((prev) => ({
+                ...prev,
+                [wh.id]: {
+                  ...buildInitialState()[wh.id],
+                },
+              }));
+              continue;
+            }
+          }
+        }
+
+        // Re-obtener locks después de posibles liberaciones
+        const locksAfter = await getSyncLocks().catch(() => locks);
+
+        for (const lock of locksAfter) {
           if (!lock.is_running) continue;
 
           const warehouse = WAREHOUSES.find((w) => w.sessionId === lock.session_id);
           if (!warehouse) continue;
+
+          // ── Lock inconsistente: is_running=true pero finished_at seteado o sin sync_run_id ──
+          if (isLockInconsistent(lock)) {
+            console.log(
+              `[Recovery] ${warehouse.name} — lock INCONSISTENTE (is_running=true pero finished_at=${lock.finished_at}, sync_run_id=${lock.sync_run_id}), liberando automáticamente`
+            );
+            await releaseSyncLock(
+              lock.session_id,
+              'Lock inconsistente — is_running=true pero finished_at seteado o sync_run_id inválido'
+            ).catch((err) => console.error(`[Recovery] Error liberando lock inconsistente de ${warehouse.name}:`, err));
+            // Resetear estado UI
+            setSyncStates((prev) => ({
+              ...prev,
+              [warehouse.id]: {
+                ...buildInitialState()[warehouse.id],
+              },
+            }));
+            continue;
+          }
 
           const stale = isStale(lock.started_at);
 
@@ -373,8 +480,28 @@ export default function WarehouseSyncButtons() {
             continue;
           }
 
-          // ── Lock activo reciente: verificar si es huérfano antes de hacer polling ──
+          // ── Lock activo reciente: verificar si es huérfano o zombie antes de hacer polling ──
           const baseElapsed = calcElapsedFrom(lock.started_at);
+
+          // Verificar si el sync run asociado es zombie (n8n murió)
+          const runningSync = await getRunningSyncForSession(lock.session_id).catch(() => null);
+          if (runningSync) {
+            const runningMinutes = runningSync.started_at
+              ? (Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60
+              : 0;
+            if (runningMinutes >= ZOMBIE_SYNC_RUN_MINUTES) {
+              console.log(
+                `[Recovery] ${warehouse.name} — sync run zombie (${Math.round(runningMinutes)}min en 'running'), liberando`
+              );
+              await releaseSyncLock(
+                lock.session_id,
+                `Sync run zombie — ${Math.round(runningMinutes)}min en 'running' sin finalizar`
+              ).catch((err) =>
+                console.error(`[Recovery] Error liberando lock zombie de ${warehouse.name}:`, err)
+              );
+              continue;
+            }
+          }
 
           // Si el lock tiene más de 5 min, verificar que exista al menos un sync run
           if (baseElapsed > ORPHAN_THRESHOLD_SECONDS) {
@@ -386,6 +513,19 @@ export default function WarehouseSyncButtons() {
               await releaseSyncLock(
                 lock.session_id,
                 'Lock huérfano — n8n nunca creó registros de sync'
+              ).catch((err) =>
+                console.error(`[Recovery] Error liberando lock huérfano de ${warehouse.name}:`, err)
+              );
+              continue;
+            }
+            // Si el último sync run está completed o failed, el lock también es huérfano
+            if (latestSync.status === 'completed' || latestSync.status === 'failed') {
+              console.log(
+                `[Recovery] ${warehouse.name} — lock huérfano (sync run ya finalizó como '${latestSync.status}'), liberando`
+              );
+              await releaseSyncLock(
+                lock.session_id,
+                `Lock huérfano — sync run ya finalizó como '${latestSync.status}'`
               ).catch((err) =>
                 console.error(`[Recovery] Error liberando lock huérfano de ${warehouse.name}:`, err)
               );
@@ -466,17 +606,131 @@ export default function WarehouseSyncButtons() {
       // ── PASO 1 — Generar syncRunId temporal ────────────────────────
       const tempSyncRunId = generateUUID();
 
-      // ── PASO 2 — Adquirir lock ─────────────────────────────────────
+      // ── PASO 2 — Adquirir lock (con auto-recovery si está stale) ─
+      let acquired = false;
       try {
-        const locked = await acquireSyncLock(warehouse.sessionId, tempSyncRunId);
-        if (!locked) {
-          showToast('Ya existe una sincronización en curso para este almacén', 'warning');
-          return;
-        }
+        acquired = await acquireSyncLock(warehouse.sessionId, tempSyncRunId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Error al adquirir bloqueo';
         showToast(`Error de bloqueo: ${msg}`, 'error');
         return;
+      }
+
+      // Si no se pudo adquirir, verificar si el lock existente es huérfano o zombie
+      if (!acquired) {
+        try {
+          let shouldRelease = false;
+          let releaseReason = '';
+
+          const existingLock = await getSyncLock(warehouse.sessionId);
+
+          if (existingLock && existingLock.is_running) {
+            // Razón 0: Lock inconsistente (is_running=true pero finished_at seteado o sync_run_id nulo)
+            if (isLockInconsistent(existingLock)) {
+              shouldRelease = true;
+              releaseReason = 'Lock inconsistente — is_running=true pero finished_at seteado o sync_run_id inválido';
+            } else if (isStale(existingLock.started_at)) {
+              // Razón 1: Lock stale por tiempo (>60 min)
+              shouldRelease = true;
+              releaseReason = 'Lock stale (>60 min)';
+            } else {
+              // Razón 2: No hay sync run activo (n8n nunca lo creó o ya terminó)
+              const runningSync = await getRunningSyncForSession(warehouse.sessionId).catch(() => null);
+              if (!runningSync) {
+                // Verificar el último sync run — si está completed o failed, el lock es huérfano
+                const latestSync = await getLatestSyncRun(warehouse.sessionId).catch(() => null);
+                if (!latestSync || latestSync.status === 'completed' || latestSync.status === 'failed') {
+                  shouldRelease = true;
+                  releaseReason = latestSync
+                    ? `Lock huérfano — sync run ya finalizó como '${latestSync.status}'`
+                    : 'Lock huérfano — no existe sync run asociado';
+                }
+              } else {
+                // Razón 3: Sync run zombie (>5 min en 'running')
+                const runningMinutes = runningSync.started_at
+                  ? (Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60
+                  : 0;
+                if (runningMinutes >= ZOMBIE_SYNC_RUN_MINUTES) {
+                  shouldRelease = true;
+                  releaseReason = `Sync run zombie (${Math.round(runningMinutes)}min en 'running')`;
+                }
+              }
+            }
+          } else {
+            // No hay lock, pero puede haber un sync run zombie sin lock
+            const runningSync = await getRunningSyncForSession(warehouse.sessionId).catch(() => null);
+            if (runningSync) {
+              const runningMinutes = runningSync.started_at
+                ? (Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60
+                : 0;
+              if (runningMinutes >= ZOMBIE_SYNC_RUN_MINUTES) {
+                shouldRelease = true;
+                releaseReason = `Sync run zombie sin lock (${Math.round(runningMinutes)}min en 'running')`;
+              } else {
+                // Hay un sync run running reciente sin lock (<5 min) — mostrar como syncing
+                // para que el botón Stop aparezca
+                setSyncStates((prev) => ({
+                  ...prev,
+                  [warehouse.id]: {
+                    status: 'syncing',
+                    syncRunId: runningSync.id,
+                    startedAt: runningSync.started_at,
+                    error: null,
+                    elapsedSeconds: Math.floor(runningMinutes * 60),
+                  },
+                }));
+                startPolling(warehouse.id, warehouse.sessionId, Math.floor(runningMinutes * 60), runningSync.started_at);
+                showToast(
+                  `Sincronización en curso (${Math.round(runningMinutes)}min). Usá el botón Stop para cancelarla.`,
+                  'warning'
+                );
+                return;
+              }
+            }
+          }
+
+          if (shouldRelease) {
+            console.log(`[Sync] ${warehouse.name} — ${releaseReason}, liberando automáticamente`);
+            await releaseSyncLock(warehouse.sessionId, releaseReason).catch(() => {});
+            acquired = await acquireSyncLock(warehouse.sessionId, tempSyncRunId);
+          }
+        } catch (innerErr) {
+          console.error(`[Sync] ${warehouse.name} — error en auto-recovery:`, innerErr);
+        }
+
+        if (!acquired) {
+          // Si después de todo el recovery sigue sin poder, ahora sí mostramos el mensaje
+          // Pero intentamos dar info más útil
+          try {
+            const runningSync = await getRunningSyncForSession(warehouse.sessionId).catch(() => null);
+            if (runningSync) {
+              const runningMinutes = runningSync.started_at
+                ? Math.round((Date.now() - new Date(runningSync.started_at).getTime()) / 1000 / 60)
+                : 0;
+              showToast(
+                `Sincronización en curso (${runningMinutes}min). Usá el botón Stop para cancelarla.`,
+                'warning'
+              );
+              // Mostrar como syncing para que el botón Stop aparezca
+              setSyncStates((prev) => ({
+                ...prev,
+                [warehouse.id]: {
+                  status: 'syncing',
+                  syncRunId: runningSync.id,
+                  startedAt: runningSync.started_at,
+                  error: null,
+                  elapsedSeconds: runningMinutes * 60,
+                },
+              }));
+              startPolling(warehouse.id, warehouse.sessionId, runningMinutes * 60, runningSync.started_at);
+            } else {
+              showToast('Ya existe una sincronización en curso para este almacén', 'warning');
+            }
+          } catch {
+            showToast('Ya existe una sincronización en curso para este almacén', 'warning');
+          }
+          return;
+        }
       }
 
       // ── PASO 3 — Lock adquirido, cambiar a starting ────────────────
@@ -559,6 +813,41 @@ export default function WarehouseSyncButtons() {
       }
     },
     [syncStates, hasActiveSync, selectedSituation, showToast, startPolling]
+  );
+
+  // ── Handler: click en Stop ───────────────────────────────────────────
+
+  const handleStop = useCallback(
+    async (warehouse: Warehouse) => {
+      const currentState = syncStates[warehouse.id];
+      if (!currentState || (currentState.status !== 'syncing' && currentState.status !== 'stale')) {
+        return;
+      }
+
+      console.log(`[Stop] ${warehouse.name} — forzando detención`);
+
+      // Limpiar todos los timers de este warehouse
+      clearTimers(warehouse.id);
+
+      // Liberar el lock en la BD
+      await releaseSyncLock(
+        warehouse.sessionId,
+        'Detención forzada por el usuario desde el botón Stop'
+      ).catch((err) => console.error(`[Stop] Error liberando lock de ${warehouse.name}:`, err));
+
+      if (!mountedRef.current) return;
+
+      // Resetear estado local
+      setSyncStates((prev) => ({
+        ...prev,
+        [warehouse.id]: {
+          ...buildInitialState()[warehouse.id],
+        },
+      }));
+
+      showToast(`Sincronización de ${warehouse.name} detenida`, 'warning');
+    },
+    [syncStates, clearTimers, showToast]
   );
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -662,52 +951,67 @@ export default function WarehouseSyncButtons() {
                 </div>
               )}
 
-              {/* Botón */}
-              <button
-                onClick={() => handleSync(wh)}
-                disabled={isBusy || lockedByOther}
-                title={
-                  lockedByOther
-                    ? 'Otro almacén está sincronizando — esperá a que termine'
+              {/* Botones */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleSync(wh)}
+                  disabled={isBusy || lockedByOther}
+                  title={
+                    lockedByOther
+                      ? 'Otro almacén está sincronizando — esperá a que termine'
+                      : isBusy
+                      ? 'Sincronización en curso'
+                      : ''
+                  }
+                  className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+                    isBusy || lockedByOther
+                      ? 'border-gray-200 text-gray-400 bg-white/60 cursor-not-allowed'
+                      : `border-white/80 ${wh.textClass} bg-white ${wh.hoverBgClass} shadow-sm`
+                  }`}
+                >
+                  <div className="w-4 h-4 flex items-center justify-center">
+                    {isBusy ? (
+                      <i className="ri-loader-4-line animate-spin text-sm"></i>
+                    ) : lockedByOther ? (
+                      <i className="ri-lock-line text-sm"></i>
+                    ) : state?.status === 'success' ? (
+                      <i className="ri-checkbox-circle-line text-sm text-emerald-600"></i>
+                    ) : state?.status === 'error' ? (
+                      <i className="ri-error-warning-line text-sm text-red-600"></i>
+                    ) : state?.status === 'stale' ? (
+                      <i className="ri-restart-line text-sm"></i>
+                    ) : (
+                      <i className="ri-refresh-line text-sm"></i>
+                    )}
+                  </div>
+                  {state?.status === 'stale'
+                    ? 'Reintentar'
                     : isBusy
-                    ? 'Sincronización en curso'
-                    : ''
-                }
-                className={`flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
-                  isBusy || lockedByOther
-                    ? 'border-gray-200 text-gray-400 bg-white/60 cursor-not-allowed'
-                    : `border-white/80 ${wh.textClass} bg-white ${wh.hoverBgClass} shadow-sm`
-                }`}
-              >
-                <div className="w-4 h-4 flex items-center justify-center">
-                  {isBusy ? (
-                    <i className="ri-loader-4-line animate-spin text-sm"></i>
-                  ) : lockedByOther ? (
-                    <i className="ri-lock-line text-sm"></i>
-                  ) : state?.status === 'success' ? (
-                    <i className="ri-checkbox-circle-line text-sm text-emerald-600"></i>
-                  ) : state?.status === 'error' ? (
-                    <i className="ri-error-warning-line text-sm text-red-600"></i>
-                  ) : state?.status === 'stale' ? (
-                    <i className="ri-restart-line text-sm"></i>
-                  ) : (
-                    <i className="ri-refresh-line text-sm"></i>
-                  )}
-                </div>
-                {state?.status === 'stale'
-                  ? 'Reintentar'
-                  : isBusy
-                  ? state?.status === 'starting'
-                    ? 'Iniciando...'
-                    : 'Sincronizando...'
-                  : lockedByOther
-                  ? 'Bloqueado'
-                  : state?.status === 'success'
-                  ? 'Actualizado'
-                  : state?.status === 'error'
-                  ? 'Reintentar'
-                  : 'Sincronizar'}
-              </button>
+                    ? state?.status === 'starting'
+                      ? 'Iniciando...'
+                      : 'Sincronizando...'
+                    : lockedByOther
+                    ? 'Bloqueado'
+                    : state?.status === 'success'
+                    ? 'Actualizado'
+                    : state?.status === 'error'
+                    ? 'Reintentar'
+                    : 'Sincronizar'}
+                </button>
+
+                {/* Botón Stop — solo visible cuando está syncing o stale */}
+                {(state?.status === 'syncing' || state?.status === 'stale' || state?.status === 'starting') && (
+                  <button
+                    onClick={() => handleStop(wh)}
+                    title="Forzar detención de la sincronización"
+                    className="flex items-center justify-center w-8 h-8 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors cursor-pointer flex-shrink-0"
+                  >
+                    <div className="w-4 h-4 flex items-center justify-center">
+                      <i className="ri-stop-fill text-base"></i>
+                    </div>
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
