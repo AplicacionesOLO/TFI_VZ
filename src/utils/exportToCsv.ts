@@ -1,5 +1,6 @@
 import type { TfiComparisonLine, TfiUserPrecision, TfiSession, DashboardStats, UserRankingCounts, UserRankingRecounts, UserRankingGlobal, UserRankingV2, DashboardV2Stats } from '@/types/tfi.types';
-import type { ComparisonV2Line } from '@/types/comparison-v2.types';
+import type { ComparisonV2Line, ComparisonMode } from '@/types/comparison-v2.types';
+import { getExportRows } from '@/pages/comparison-v2/types/columns';
 import {
   sanitizeFilename,
   todayStr,
@@ -477,6 +478,21 @@ const COMPARISON_V2_HEADER: CellValue[] = [
   'Dif. Final',
 ];
 
+const SINGLE_TAKE_V2_HEADER: CellValue[] = [
+  'Artículo',
+  'Descripción',
+  'Ubicación',
+  'Teórico',
+  'Nombre Toma',
+  'Conteo',
+  'Usuario',
+  'Dif. vs Teórico',
+  'Situación',
+  'Estado Formulario',
+  'Registrado',
+  'Estado',
+];
+
 function comparisonV2Row(l: ComparisonV2Line): CellValue[] {
   const statusLabels: Record<string, string> = {
     MATCH: 'MATCH',
@@ -488,6 +504,7 @@ function comparisonV2Row(l: ComparisonV2Line): CellValue[] {
     PENDING_TAKE_A: 'PEND. TOMA A',
     PENDING_TAKE_B: 'PEND. TOMA B',
     NO_DATA: 'SIN DATOS',
+    SINGLE_TAKE: 'SOLO TOMA A',
   };
   return [
     l.article_id,
@@ -498,7 +515,7 @@ function comparisonV2Row(l: ComparisonV2Line): CellValue[] {
     l.take_a_name,
     fmtNum(l.take_a_qty),
     l.take_a_user ?? '-',
-    l.take_b_name,
+    l.take_b_name ?? '-',
     fmtNum(l.take_b_qty),
     l.take_b_user ?? '-',
     fmtNum(l.recount_qty),
@@ -509,12 +526,50 @@ function comparisonV2Row(l: ComparisonV2Line): CellValue[] {
   ];
 }
 
+function singleTakeV2Row(l: ComparisonV2Line): CellValue[] {
+  const statusLabels: Record<string, string> = {
+    MATCH: 'MATCH',
+    DIFFERENT: 'DIFFERENT',
+    PENDING_TAKE_A: 'PEND. TOMA A',
+    SINGLE_TAKE: 'SOLO TOMA A',
+  };
+  return [
+    l.article_id,
+    l.article_description ?? '-',
+    l.location_id ?? '-',
+    fmtNum(l.theoretical_qty),
+    l.take_a_name,
+    fmtNum(l.take_a_qty),
+    l.take_a_user ?? '-',
+    fmtNum(l.final_difference),
+    l.situation ?? '-',
+    l.form_status ?? '-',
+    l.registered_at ? new Date(l.registered_at).toLocaleDateString('es-AR') : '-',
+    statusLabels[l.comparison_status] ?? l.comparison_status,
+  ];
+}
+
 export function exportComparisonV2ToCsv(
   lines: ComparisonV2Line[],
   title: string,
   sessionName: string,
+  mode: ComparisonMode = 'compare',
+  visibleColumns?: string[],
 ): void {
-  const rows = lines.map((l) => comparisonV2Row(l));
+  const isSingleTake = mode === 'single_take';
+  let rows: CellValue[][];
+
+  if (visibleColumns && visibleColumns.length > 0) {
+    // Dynamic export based on user's column configuration
+    rows = getExportRows(lines, visibleColumns);
+  } else {
+    // Fallback to static export
+    const header = isSingleTake ? SINGLE_TAKE_V2_HEADER : COMPARISON_V2_HEADER;
+    const rowFn = isSingleTake ? singleTakeV2Row : comparisonV2Row;
+    rows = [header, ...lines.map((l) => rowFn(l))];
+  }
+
   const safe = sanitizeFilename(sessionName);
-  downloadCsv(toCsvString([COMPARISON_V2_HEADER, ...rows]), `TFI_COMPARACION_V2_${safe}_${todayStr()}.csv`);
+  const safeTitle = sanitizeFilename(title);
+  downloadCsv(toCsvString(rows), `TFI_COMPARACION_V2_${safeTitle}_${safe}_${todayStr()}.csv`);
 }

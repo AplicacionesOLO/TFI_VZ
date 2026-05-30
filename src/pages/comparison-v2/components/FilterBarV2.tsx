@@ -1,9 +1,12 @@
+import type { ComparisonMode } from '@/types/comparison-v2.types';
+
 interface FilterBarV2Props {
   articleSearch: string;
   statusFilter: string;
   onArticleSearchChange: (val: string) => void;
   onStatusFilterChange: (val: string) => void;
   onReset: () => void;
+  mode?: ComparisonMode;
 }
 
 const statusOptions: { value: string; label: string }[] = [
@@ -16,6 +19,14 @@ const statusOptions: { value: string; label: string }[] = [
   { value: 'DIFFERENT', label: 'DIFFERENT' },
   { value: 'PENDING_TAKE_A', label: 'PEND. TOMA A' },
   { value: 'PENDING_TAKE_B', label: 'PEND. TOMA B' },
+  { value: 'SINGLE_TAKE', label: 'SOLO TOMA A' },
+];
+
+const singleTakeOptions: { value: string; label: string }[] = [
+  { value: '', label: 'Todos los estados' },
+  { value: 'MATCH', label: 'MATCH' },
+  { value: 'DIFFERENT', label: 'DIFFERENT' },
+  { value: 'PENDING_TAKE_A', label: 'PEND. TOMA A' },
 ];
 
 export default function FilterBarV2({
@@ -24,7 +35,9 @@ export default function FilterBarV2({
   onArticleSearchChange,
   onStatusFilterChange,
   onReset,
+  mode = 'compare',
 }: FilterBarV2Props) {
+  const options = mode === 'single_take' ? singleTakeOptions : statusOptions;
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4">
       <div className="flex flex-wrap gap-3 items-end">
@@ -49,7 +62,7 @@ export default function FilterBarV2({
             onChange={(e) => onStatusFilterChange(e.target.value)}
             className="border border-gray-200 rounded-lg text-sm px-3 py-2.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 cursor-pointer"
           >
-            {statusOptions.map((o) => (
+            {options.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>

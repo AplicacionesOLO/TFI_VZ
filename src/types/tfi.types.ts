@@ -220,17 +220,46 @@ export interface N8nRefreshPayload {
   timestamp: string;
   warehouse?: string;
   warehouse_id?: string;
+  sync_run_id: string;
 }
+
+// ─── SINCRONIZACIÓN — TIPOS ENTERPRISE V2 ───────────────────────────────────────
+
+export type SyncRunStatus =
+  | 'queued'
+  | 'running'
+  | 'finishing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'stale'
+  | 'zombie';
+
+export type ComputedSyncStatus =
+  | 'idle'
+  | 'queued'
+  | 'starting'
+  | 'syncing'
+  | 'finishing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'stale'
+  | 'timeout'
+  | 'orphaned'
+  | 'zombie'
+  | 'partial_failure';
 
 export interface TfiSyncRun {
   id: string;
   session_id: string;
   situation: string | null;
-  status: 'running' | 'completed' | 'failed' | string;
+  status: SyncRunStatus;
   started_at: string;
   finished_at: string | null;
   total_rows: number | null;
   error_message: string | null;
+  updated_at: string | null;
 }
 
 export interface TfiSyncLock {
@@ -243,3 +272,67 @@ export interface TfiSyncLock {
   locked_by: string | null;
   error_message: string | null;
 }
+
+export interface TfiSyncRunBranch {
+  id: string;
+  sync_run_id: string;
+  branch_name: string;
+  status: 'running' | 'completed' | 'failed';
+  rows_processed: number | null;
+  completed_at: string;
+}
+
+export interface SyncStatusResult {
+  // Lock info
+  lock_is_running: boolean;
+  lock_sync_run_id: string | null;
+  lock_started_at: string | null;
+  lock_finished_at: string | null;
+  lock_updated_at: string | null;
+  lock_error_message: string | null;
+  // Sync run info
+  sync_run_id: string | null;
+  sync_run_status: string | null;
+  sync_run_started_at: string | null;
+  sync_run_finished_at: string | null;
+  sync_run_total_rows: number | null;
+  sync_run_error_message: string | null;
+  // Branch summary
+  branch_count: number;
+  branches_completed: number;
+  branches_failed: number;
+  branches_running: number;
+  // Health checks
+  last_n8n_step_at: string | null;
+  last_n8n_step_name: string | null;
+  last_n8n_branch: string | null;
+  minutes_since_start: number;
+  minutes_since_last_update: number;
+  minutes_since_last_n8n_step: number;
+  // Computed status
+  computed_status: ComputedSyncStatus;
+  computed_message: string;
+}
+
+export interface SyncCleanupResult {
+  cleaned_locks: number;
+  cleaned_syncs: number;
+  cleaned_branches: number;
+  details: string[];
+}
+
+export interface ForceReleaseResult {
+  released: boolean;
+  previous_lock_id: string | null;
+  previous_sync_run_id: string | null;
+  message: string;
+}
+
+export interface CancelSyncResult {
+  cancelled: boolean;
+  previous_status: string | null;
+  message: string;
+}
+
+// ─── ALIASES LEGACY ──────────────────────────────────────────────────────────
+export type SyncStatus = 'idle' | 'starting' | 'syncing' | 'success' | 'error' | 'stale';

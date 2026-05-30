@@ -31,6 +31,12 @@ export default function TakeSelector({
     };
   });
 
+  // Opciones para Toma B incluyen "Sin toma B"
+  const bOptions = [
+    { value: '', label: 'Sin toma B / Solo Toma A', subtitle: 'Ver solo registros de Toma A' },
+    ...options,
+  ];
+
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4">
       <div className="flex flex-wrap items-end gap-4">
@@ -48,7 +54,7 @@ export default function TakeSelector({
         />
 
         <SearchableDropdown
-          options={options}
+          options={bOptions}
           value={takeB}
           onChange={onTakeBChange}
           label="Toma B"
@@ -65,6 +71,14 @@ export default function TakeSelector({
             <span className="text-xs text-gray-400 bg-gray-50 px-2.5 py-1.5 rounded-lg">
               <i className="ri-arrow-left-right-line mr-1"></i>
               Comparando
+            </span>
+          </div>
+        )}
+        {takeA && !takeB && (
+          <div className="flex items-center gap-2 pb-0.5">
+            <span className="text-xs text-emerald-600 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-200">
+              <i className="ri-eye-line mr-1"></i>
+              Solo Toma A
             </span>
           </div>
         )}

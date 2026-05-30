@@ -1,8 +1,8 @@
 # PROJECT CONTEXT — TFI (Toma Física de Inventario)
 
 > **Última actualización:** 2026-05-28
-> **Versión del proyecto:** 79
-> **Estado:** Operativo — Fase 7 (Dashboard V2 — Datos reales conectados 🆕)
+> **Versión del proyecto:** 84
+> **Estado:** Operativo — Fase 8 (Sync Enterprise — Lifecycle robusto 🆕)
 
 ---
 
@@ -615,25 +615,190 @@ La arquitectura V2 (`/comparison-v2`) usa la tabla **normalizada** `tfi_count_at
 | **Paginación** | Frontend (10 por página) | Server-side via RPC (20 por página) |
 | **Estados** | match, ok_user1, ok_user2, pending_recount, both_different, etc. | MATCH, PENDING_RECOUNT, RECOUNT_MATCH_A/B, ALL_DIFFERENT |
 
+## Tabla V2 — Diseño Visual y Configuración de Columnas
+
+### Agrupación Visual por Color
+
+Las columnas están agrupadas visualmente con fondos de color translúcido:
+
+| Grupo | Color | Descripción |
+|-------|-------|-------------|
+| General | Sin color | Artículo, Ubicación A/B, Teórico |
+| Toma A | Verde suave rgba(34,197,94,0.06) | Cteo A, Usuario A, Dif. A, Situación A, Estado Form. A |
+| Toma B | Azul suave rgba(59,130,246,0.06) | Cteo B, Usuario B, Dif. B, Situación B, Estado Form. B |
+| Reconteo | Ámbar suave rgba(245,158,11,0.06) | Reconteo, Usuario Rec., Situación Rec., Estado Form. Rec. |
+| Resultado | Violeta suave rgba(139,92,246,0.06) | Dif. Final, Estado Final, Registrado |
+
+El header tiene dos filas:
+1. Fila de grupos (General / Toma A / Toma B / Reconteo / Resultado)
+2. Fila de columnas (nombres individuales, con icono de arrastre)
+
+### Drag & Drop de Columnas
+
+- El usuario puede reordenar columnas arrastrando el encabezado
+- Las columnas sticky (Artículo, Ubicación A) no son movibles
+- Las demás columnas muestran un ri-draggable en el header
+- Al soltar sobre otra columna, se intercambian posiciones
+- El estado de arrastre se persiste inmediatamente en localStorage
+
+### Botón "Columnas" (encima de la tabla)
+
+- Ubicado encima de la tabla, alineado a la derecha junto a los summary pills
+- Icono `ri-layout-column-line`
+- Al hacer clic abre un dropdown con checkboxes agrupados por color
+- Cada checkbox controla la visibilidad de una columna
+- Desmarcar = ocultar; marcar = mostrar
+- Cambios aplicados inmediatamente sin recarga
+
+### Selector de Columnas (Dropdown)
+
+- Panel desplegable con todas las columnas no-sticky
+- Agrupadas por grupo (General, Toma A, Toma B, Reconteo, Resultado) con indicador de color
+- Checkbox para cada columna
+- Todas las columnas son togglables excepto las sticky (Artículo, Ubicación A)
+- En modo `single_take` solo se muestran las columnas aplicables a ese modo
+
+### Persistencia en localStorage
+
+- Clave: `comparison_v2_visible_columns`
+- Contenido guardado: `{ order, hidden, widths }`
+- Se persiste automáticamente al mover o mostrar/ocultar columnas
+- Al refrescar la página se restaura exactamente la configuración anterior
+- El layout por defecto muestra todas las columnas (ninguna oculta inicialmente)
+
+### Botón "Restaurar columnas por defecto"
+
+Disponible en el panel de configuración de columnas. Restablece:
+- Orden de columnas al layout por defecto según el modo activo (`compare` o `single_take`)
+- Todas las columnas visibles (ninguna oculta)
+- Cierra el panel al restaurar
+
+### Columnas sticky (siempre visibles)
+
+- `article_id` — Artículo: sticky izquierda, `left-0`
+- `location_id` — Ubicación A: sticky, `left-[180px]`
+
+### Columnas por defecto — modo `compare`
+
+Todas las columnas visibles inicialmente:
+
+| # | Columna | Grupo |
+|---|---------|-------|
+| 1 | Artículo | General |
+| 2 | Ubicación A | General |
+| 3 | Ubicación B | General |
+| 4 | Teórico | General |
+| 5 | Cteo Toma A | Toma A |
+| 6 | Usuario A | Toma A |
+| 7 | Dif. vs Teórico A | Toma A |
+| 8 | Situación A | Toma A |
+| 9 | Estado Formulario A | Toma A |
+| 10 | Cteo Toma B | Toma B |
+| 11 | Usuario B | Toma B |
+| 12 | Dif. vs Teórico B | Toma B |
+| 13 | Situación B | Toma B |
+| 14 | Estado Formulario B | Toma B |
+| 15 | Reconteo | Reconteo |
+| 16 | Usuario Rec. | Reconteo |
+| 17 | Situación Reconteo | Reconteo |
+| 18 | Estado Formulario Rec. | Reconteo |
+| 19 | Dif. Final | Resultado |
+| 20 | Estado Final | Resultado |
+| 21 | Registrado | Resultado |
+
+### Columnas por defecto — modo `single_take`
+
+| # | Columna | Grupo |
+|---|---------|-------|
+| 1 | Artículo | General |
+| 2 | Ubicación | General |
+| 3 | Teórico | General |
+| 4 | Cteo Toma A | Toma A |
+| 5 | Usuario A | Toma A |
+| 6 | Dif. vs Teórico A | Toma A |
+| 7 | Situación A | Toma A |
+| 8 | Estado Formulario A | Toma A |
+| 9 | Dif. Final | Resultado |
+| 10 | Estado Final | Resultado |
+| 11 | Registrado | Resultado |
+
+### Exportación con orden de columnas
+
+Excel y CSV exportan respetando exactamente el orden y visibilidad configurados por el usuario:
+- Se llama `getExportRows(lines, visibleColumns)` desde `columns.ts`
+- `visibleColumns` se obtiene del hook `useColumnConfig`
+- Si `visibleColumns` es undefined — fallback al formato estático anterior
+- La exportación usa solo las columnas visibles en el orden actual del usuario
+
+### Archivos del sistema de columnas
+
+```
+src/pages/comparison-v2/
+  types/
+    columns.ts             — COLUMN_META, GROUP_COLORS, GROUP_LABELS, DEFAULT_ORDERS, getExportRows
+  hooks/
+    useColumnConfig.ts     — Estado + persistencia + drag&drop + toggle visibility
+  components/
+    ComparisonV2Table.tsx  — Tabla con drag&drop, colores por grupo, sticky columns
+    ColumnSettings.tsx     — Dropdown de checkboxes para ocultar/mostrar columnas
+```
+
+---
+
+## Modos de operación de Comparación V2
+
+### Modo `compare` — Comparación A vs B
+
+- Se activa cuando el usuario selecciona **Toma A y Toma B**
+- Llama RPC `get_comparison_v2_f`
+- Muestra 16 columnas: artículo, ubicación A, ubicación B, teórico, conteo A, usuario A, conteo B, usuario B, reconteo, usuario rec., estado, dif. final
+- Summary pills: Total, MATCH, Pend. Reconteo, Rec. Match A, Rec. Match B, Todos Diff.
+- Exportación Excel: hoja "Comparación V2" con 16 columnas
+- Exportación CSV: misma estructura
+
+### Modo `single_take` — Solo Toma A
+
+- Se activa cuando el usuario selecciona **solo Toma A** (Toma B = "Sin toma B / Solo Toma A")
+- Llama RPC `get_take_lines_v2_f` — consulta `tfi_count_attempts` directamente
+- Muestra 10 columnas: artículo, ubicación, teórico, conteo Toma A, usuario A, dif. vs teórico, situación, estado formulario, registrado, estado
+- Oculta: take_b_qty, take_b_user, recount_qty, recount_user, comparison_status de comparación
+- Estado de filas: `MATCH`, `DIFFERENT`, `PENDING_TAKE_A` (calculado por el RPC)
+- Summary pills: Total, MATCH, Different, Solo Toma A
+- Exportación Excel: hoja "Solo Toma A" con 12 columnas específicas
+- Exportación CSV: misma estructura reducida
+
+### Decisión de modo
+
+```typescript
+const mode: ComparisonMode = takeA && !takeB ? 'single_take' : 'compare';
+```
+
+### Cuándo usar cada RPC
+
+| Condición | RPC | Descripción |
+|-----------|-----|-------------|
+| `takeA && takeB` | `get_comparison_v2_f` | Comparación A vs B clásica |
+| `takeA && !takeB` | `get_take_lines_v2_f` | Vista solo Toma A — registros individuales |
+
 ## Archivos del Módulo V2
 
 ```
 src/
 ├── types/
-│   └── comparison-v2.types.ts          # Tipos: AvailableTake, ComparisonV2Line, etc.
+│   └── comparison-v2.types.ts          # Tipos: AvailableTake, ComparisonV2Line, ComparisonMode, etc.
 ├── services/
-│   └── comparison-v2.service.ts        # RPC calls a Supabase (sin mocks)
+│   └── comparison-v2.service.ts        # RPC calls: getComparisonV2, getSingleTakeLinesV2, getAllComparisonV2ForExport
 ├── pages/
 │   └── comparison-v2/
-│       ├── page.tsx                     # Página principal
+│       ├── page.tsx                     # Página principal — maneja ambos modos
 │       └── components/
-│           ├── TakeSelector.tsx         # Selector de Toma A / Toma B
-│           ├── FilterBarV2.tsx          # Filtros (búsqueda, estado)
-│           ├── ComparisonV2Table.tsx    # Tabla con 11 columnas + paginación
-│           └── StatusBadgeV2.tsx        # Badges de estado V2
+│           ├── TakeSelector.tsx         # Selector con opción "Sin toma B"
+│           ├── FilterBarV2.tsx          # Filtros adaptativos según modo
+│           ├── ComparisonV2Table.tsx    # Tabla dual-mode: compare / single_take
+│           └── StatusBadgeV2.tsx        # Badges de estado V2 + SINGLE_TAKE
 └── utils/
-    ├── exportToExcel.ts                 # + exportComparisonV2ToExcel()
-    └── exportToCsv.ts                   # + exportComparisonV2ToCsv()
+    ├── exportToExcel.ts                 # exportComparisonV2ToExcel(lines, title, session, mode)
+    └── exportToCsv.ts                   # exportComparisonV2ToCsv(lines, title, session, mode)
 ```
 
 ## Coexistencia V1 y V2
@@ -1181,28 +1346,248 @@ Todas las queries usan el singleton `supabase` de `src/lib/supabase.ts`.
 
 ## Problemas Conocidos
 
-1. **Locks huérfanos:** Si N8N se cae después de adquirir lock pero antes de crear `tfi_sync_runs`, el lock queda para siempre. Mitigado con recovery automático (>5min sin registros).
-2. **Polling infinito:** Si N8N nunca termina ni falla un sync, el frontend hace polling indefinido. Mitigado con stale threshold (60min).
+1. ✅ **Locks huérfanos:** Mitigado. Recovery automático con `cleanup_zombie_syncs` RPC al cargar la página.
+2. ✅ **Polling infinito:** Mitigado. MAX_POLL_ATTEMPTS (1200 = 60min a 3s) con timeout automático. Además el RPC calcula el `computed_status` = 'timeout' server-side.
 3. **Sin rate limiting:** Los webhooks no tienen rate limiting — un usuario podría disparar múltiples syncs simultáneos si el frontend no los bloquea.
 4. **CORS en N8N:** El proxy Edge Function es un workaround. Idealmente N8N debería configurar CORS correctamente.
 5. **1000 rows limit:** Supabase limita queries a 1000 rows. El frontend usa `fetchAllPages()` con paginación interna, lo cual es ineficiente para sesiones muy grandes.
 
-## Deuda Técnica
+---
 
-- `calculateRankings()` hace cálculos en frontend que idealmente deberían estar en una vista SQL
-- `SessionContext` mezcla lógica de selección con exclusión hardcodeada de "Sillaca pruebas"
-- URLs de webhooks hardcodeadas en `WarehouseSyncButtons.tsx` (deberían ser variables de entorno)
-- Los archivos de i18n están vacíos — la app usa strings hardcodeados en español
-- `tfi.types.ts` tiene aliases redundantes (`ComparisonLine = TfiComparisonLine`, etc.) para backward compatibility
-- `TfiRefreshControl` y `WarehouseSyncButtons` tienen lógica de sync duplicada
+# SYNC LIFECYCLE — ENTERPRISE ARCHITECTURE V2 🆕
 
-## Riesgos Técnicos
+> **Última actualización:** 2026-05-28
+> **Versión:** 2.0 (Definitivo)
+> **Estado:** Frontend renderiza EXCLUSIVAMENTE estado backend. Sin timers locales.
 
-- **Dependencia de N8N:** Si N8N está caído, no se pueden sincronizar datos del WMS
-- **Dependencia de Supabase:** Si Supabase está caído, toda la app deja de funcionar
-- **Sin autenticación:** Cualquiera con la URL puede ver datos de inventario
-- **Sin backups automáticos:** Depende de los backups de Supabase
-- **WMS single point of failure:** Si el WMS no responde, N8N no puede extraer datos
+## Principio Fundamental (v102 — DEFINITIVO)
+
+**El frontend NUNCA determina el estado de sincronización por sí solo.**
+
+La fuente de verdad única es el backend:
+- `tfi_sync_runs` — estado del sync
+- `tfi_sync_locks` — lock de concurrencia
+- `tfi_sync_run_branches` — progreso por rama
+- `tfi_n8n_step_logs` — heartbeat de N8N
+
+El frontend consulta `get_sync_status_v2_single` cada 3 segundos y renderiza **exactamente** lo que el backend devuelve en `computed_status`.
+
+### Funciones eliminadas del frontend
+
+Las siguientes funciones fueron **eliminadas** de `sync-lifecycle.service.ts`.
+Ya NO existen en el código y no deben reintroducirse:
+
+| Función eliminada | Razón |
+|------------------|---------|
+| `isDeadSync()` | Override del backend — generaba falsos `stale` |
+| `hasExceededN8nTimeout()` | Override del backend — generaba falsos `stale` |
+| `shouldResetToIdle()` | Override del backend — reseteaba syncs legítimos |
+| `isSyncingWithZeroRowsHealthy()` | Lógica de inferencia — no necesaria |
+| `getSyncDisplayMessage()` | Generaba mensajes que contradecían al backend |
+| `checkAnyActiveSync()` | Verificación global innecesaria |
+
+### Funciones de warning visual (reemplazo)
+
+Estas funciones existen únicamente para mostrar badges/advertencias en la UI.
+**Nunca cambian `computed_status`.**
+
+| Función | Propósito |
+|---------|----------|
+| `hasMissingHeartbeat(status)` | Warning: N8N nunca envió heartbeat |
+| `hasStaleHeartbeat(status)` | Warning: N8N sin actividad >10 min |
+
+## Hook centralizado: useSyncPolling
+
+Archivo: `src/hooks/useSyncPolling.ts`
+
+**Garantiza:**
+- Máximo 1 interval activo por `sessionId` (global registry)
+- Deduplicación automática entre `WarehouseSyncButtons` y `TfiRefreshControl`
+- Stop automático cuando backend devuelve estado terminal
+- Cleanup automático en unmount
+- Suscriptores múltiples comparten el mismo intervalo
+
+**API:**
+```typescript
+const { status, isPolling, startPolling, stopPolling, resetState } = useSyncPolling(sessionId)
+```
+
+**Estados terminales (detienen polling automáticamente):**
+`completed`, `failed`, `cancelled`, `idle`, `stale`, `timeout`, `orphaned`, `zombie`, `partial_failure`
+
+**Estados activos (polling continúa):**
+`syncing`, `starting`, `queued`, `finishing`
+
+## Estados Oficiales del Sync
+
+| Estado | `tfi_sync_runs.status` | `computed_status` | Descripción |
+|--------|------------------------|-------------------|-------------|
+| `idle` | — | `idle` | Sin sincronización activa |
+| `queued` | `queued` | `queued` | En cola, esperando iniciar |
+| `running` | `running` | `syncing` | N8N procesando datos |
+| `starting` | `running` | `starting` | Webhook disparado, N8N no confirmó |
+| `finishing` | `running` | `finishing` | N8N terminó, cerrando sync |
+| `completed` | `completed` | `completed` | Sincronización exitosa |
+| `failed` | `failed` | `failed` | Error durante sincronización |
+| `cancelled` | `cancelled` | `cancelled` | Cancelado por el usuario |
+| `stale` | `running` | `stale` | N8N sin actividad >10 min |
+| `timeout` | `running` | `timeout` | Sync >60 min sin finalizar |
+| `orphaned` | — | `orphaned` | Lock activo sin sync_run |
+| `zombie` | `running` | `zombie` | sync_run running sin lock activo |
+| `partial_failure` | `running` | `partial_failure` | Ramas fallaron, sync continúa |
+
+## Reglas del Frontend (Sin Estado Local)
+
+1. **NO hay `setInterval` para elapsed time** — el tiempo viene del backend (`minutes_since_start`)
+2. **NO hay `isTimeout` local** — el backend detecta timeout (`computed_status = 'timeout'`)
+3. **NO hay `isStale` local** — el backend detecta stale (`computed_status = 'stale'`)
+4. **El polling solo consulta y setea estado** — no toma decisiones de estado
+5. **El botón STOP llama `cancel_sync_run` RPC** — no solo libera el lock
+
+## Lifecycle Correcto
+
+### START
+```
+Frontend:
+  → acquireSyncLock(sessionId, syncRunId)
+  → triggerTfiRefresh(webhook)
+  → setSyncStatus('starting')
+  → startPolling()
+```
+
+### RUNNING
+```
+N8N debe:
+  → INSERT/UPDATE datos en tfi_count_lines / tfi_count_attempts
+  → UPDATE tfi_sync_runs SET updated_at = NOW()
+  → INSERT INTO tfi_n8n_step_logs (sync_run_id, step_name, branch_name)
+
+Frontend:
+  → getSyncStatusV2() cada 3s
+  → renderiza computed_status
+  → muestra: minutes_since_start, total_rows, branches
+```
+
+### FINISH (N8N Required)
+```sql
+UPDATE tfi_sync_runs
+SET status = 'completed',
+    finished_at = NOW(),
+    total_rows = <cantidad_de_filas_cargadas>
+WHERE id = <sync_run_id>;
+
+UPDATE tfi_sync_locks
+SET is_running = false,
+    finished_at = NOW(),
+    updated_at = NOW()
+WHERE session_id = <session_id>;
+```
+
+### ERROR (N8N Required)
+```sql
+UPDATE tfi_sync_runs
+SET status = 'failed',
+    finished_at = NOW(),
+    error_message = <mensaje_de_error>
+WHERE id = <sync_run_id>;
+
+UPDATE tfi_sync_locks
+SET is_running = false,
+    finished_at = NOW(),
+    updated_at = NOW()
+WHERE session_id = <session_id>;
+```
+
+### CANCEL (Usuario)
+```
+Frontend llama: cancelSyncRun(syncRunId, sessionId)
+
+RPC cancel_sync_run:
+  → UPDATE tfi_sync_runs SET status = 'cancelled', finished_at = NOW()
+  → UPDATE tfi_sync_locks SET is_running = false, finished_at = NOW()
+
+Frontend detecta: computed_status = 'cancelled'
+  → stopPolling()
+  → showToast('Cancelado')
+```
+
+## N8N Required Finalization Step
+
+> ⚠️ **CRÍTICO:** Si N8N no ejecuta el UPDATE al finalizar, el sync queda zombie.
+> El frontend detectará `computed_status = 'zombie'` y mostrará el botón "Reintentar".
+> El `cleanup_zombie_syncs` limpiará automáticamente en 5 minutos.
+
+## Heartbeat de N8N
+
+Durante la ejecución, N8N debe actualizar periódicamente:
+
+```sql
+-- Actualizar heartbeat
+UPDATE tfi_sync_runs SET updated_at = NOW() WHERE id = <sync_run_id>;
+
+-- Registrar paso
+INSERT INTO tfi_n8n_step_logs (sync_run_id, step_name, branch_name)
+VALUES (<sync_run_id>, <step_name>, <branch_name>);
+```
+
+Si `minutes_since_last_n8n_step > 10` y `minutes_since_start > 5` → `computed_status = 'stale'`
+
+## RPCs de Sync Lifecycle
+
+| RPC | Descripción |
+|-----|-------------|
+| `get_sync_status_v2_single(p_session_id)` | Fuente de verdad — computed_status server-side |
+| `cancel_sync_run(p_sync_run_id, p_session_id)` | **NUEVO** — Cancelación real (marca cancelled) |
+| `cleanup_zombie_syncs(p_stale_minutes, p_orphan_minutes)` | Limpieza automática |
+| `force_release_sync_lock_single(p_session_id, p_reason)` | Liberación forzada (admin) |
+| `release_tfi_sync_lock(p_session_id, p_error)` | Liberar lock y marcar failed |
+| `acquire_tfi_sync_lock(p_session_id, p_sync_run_id)` | Adquirir lock |
+
+## Servicio Frontend: `sync-lifecycle.service.ts`
+
+| Función | Descripción |
+|---------|-------------|
+| `getSyncStatusV2(sessionId)` | Fuente de verdad — consulta RPC |
+| `cancelSyncRun(syncRunId, sessionId)` | Cancelación real — llama RPC |
+| `updateSyncHeartbeat(syncRunId, stepName, branchName)` | Actualiza heartbeat |
+| `forceReleaseSyncLock(sessionId, reason)` | Liberación forzada |
+| `cleanupZombieSyncs(staleMin, orphanMin)` | Limpieza automática |
+| `acquireSyncLock(sessionId, syncRunId)` | Adquirir lock |
+| `releaseSyncLock(sessionId, error?)` | Liberar lock |
+| `isActiveState(status)` | `syncing | starting | queued | finishing` |
+| `isProblemState(status)` | `stale | timeout | orphaned | zombie | partial_failure` |
+| `isTerminalState(status)` | `completed | failed | cancelled | idle` |
+| `isCancellableState(status)` | `syncing | starting | queued | running | finishing` |
+| `formatElapsed(minutes)` | `12m 34s` |
+
+## Visualización de Logs (Debug Panel)
+
+Ambos componentes tienen botón "Debug" que muestra logs reales desde el backend:
+
+| Campo | Fuente |
+|-------|--------|
+| `Inicio` | `sync_run_started_at` |
+| `Fin` | `sync_run_finished_at` |
+| `Último paso N8N` | `last_n8n_step_at` + `last_n8n_step_name` |
+| `ID del sync` | `sync_run_id` |
+| `Tiempo transcurrido` | `minutes_since_start` |
+| `Última actualización` | `minutes_since_last_update` |
+| `Actividad N8N` | `minutes_since_last_n8n_step` |
+| `Error` | `sync_run_error_message` |
+
+## Mejoras vs Sistema Anterior
+
+| Aspecto | Antes | Ahora (V2) |
+|---------|-------|------------|
+| Fuente de verdad | `is_running` + timers locales | `getSyncStatusV2` — computed_status server-side |
+| Estados | 5 estados | 13 estados oficiales |
+| Cancelación | `releaseSyncLock` (marcaba failed) | `cancelSyncRun` RPC (marca cancelled) |
+| Elapsed time | `setInterval` local | `minutes_since_start` del backend |
+| Timeout | Threshold local | `computed_status = 'timeout'` en RPC |
+| Stale | Threshold local | `computed_status = 'stale'` en RPC |
+| Zombie | Solo UI | Auto-detection + auto-cleanup |
+| Heartbeat | No | `updated_at` + `tfi_n8n_step_logs` |
+| Debug | Console logs | Panel visual con logs reales |
 
 ---
 
@@ -1211,94 +1596,31 @@ Todas las queries usan el singleton `supabase` de `src/lib/supabase.ts`.
 ## Cómo Levantar el Proyecto
 
 ```bash
-# 1. Clonar / abrir el proyecto
-cd tfi-project
-
-# 2. Instalar dependencias
 npm install
-
-# 3. Configurar variables de entorno (.env)
-# Asegurate de tener VITE_PUBLIC_SUPABASE_URL, VITE_PUBLIC_SUPABASE_ANON_KEY,
-# y VITE_N8N_TFI_REFRESH_WEBHOOK_URL
-
-# 4. Iniciar en desarrollo
-npm run dev
-# → http://localhost:3000
-
-# 5. Build de producción
-npm run build
-# → /out/
+# Configurar .env con VITE_PUBLIC_SUPABASE_URL, VITE_PUBLIC_SUPABASE_ANON_KEY, VITE_N8N_TFI_REFRESH_WEBHOOK_URL
+npm run dev    # → http://localhost:3000
+npm run build  # → /out/
 ```
-
-## Comandos Importantes
-
-| Comando | Descripción |
-|---------|-------------|
-| `npm run dev` | Servidor de desarrollo (puerto 3000) |
-| `npm run build` | Build de producción |
-| `npm run preview` | Previsualizar build |
-| `npm run lint` | ESLint con max-warnings 0 |
-| `npm run type-check` | TypeScript type checking |
-
-## Cómo Desplegar
-
-El despliegue se hace a través de la plataforma **Readdy.ai**. El build output va a `/out/`. Las variables de entorno se configuran en el dashboard de Readdy.
-
-## Cómo Probar Cambios
-
-1. **Frontend:** `npm run dev` → verificar en `http://localhost:3000`
-2. **TypeScript:** `npm run type-check` (siempre antes de commit)
-3. **Build:** `npm run build` → verificar que compile sin errores
-4. **Supabase:** Las queries se prueban contra la instancia real (no hay entorno local)
-5. **N8N:** Los webhooks se prueban contra el sandbox de N8N (`sandboxn8n.mayoreo.biz`)
 
 ## Flujo Recomendado para Desarrollo
 
-1. **Entender el cambio:** Leer `PROJECT_CONTEXT.md` y `project_plan.md`
-2. **Identificar archivos:** Usar `grep` para encontrar código relacionado
-3. **Modificar con cuidado:**
-   - NO modificar `src/router/index.ts` ni `src/i18n/local/index.ts`
-   - NO modificar `index.html` (salvo SEO tags)
-   - NO modificar `package.json devDependencies`
-   - La lógica de negocio vive en Supabase views — si necesitás cambiar cómo se calcula `comparison_status`, modificá la vista SQL, NO el frontend
-4. **Verificar build:** `npm run type-check && npm run build`
-5. **Probar en dev:** `npm run dev` y verificar visualmente
-6. **Actualizar docs:** Si el cambio afecta arquitectura, actualizar `PROJECT_CONTEXT.md`
+1. Leer `PROJECT_CONTEXT.md` y `project_plan.md`
+2. NO modificar `src/router/index.ts` ni `src/i18n/local/index.ts`
+3. Verificar build: `npm run type-check && npm run build`
+4. Actualizar docs si el cambio afecta arquitectura
 
 ---
 
 # INTEGRATIONS
 
-## APIs Externas
+## N8N Webhooks
 
-| API | URL | Propósito |
-|-----|-----|-----------|
-| N8N Webhook (Patio Febeca) | `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh` | Sincronización almacén |
-| N8N Webhook (Febeca) | `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh1` | Sincronización almacén |
-| N8N Webhook (Sillaca) | `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh2` | Sincronización almacén |
-| N8N Webhook (Beval) | `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh3` | Sincronización almacén |
-| Supabase REST API | `https://nnhtstifbrljcufaoguk.supabase.co` | Base de datos |
-| Supabase Edge Functions | `https://nnhtstifbrljcufaoguk.supabase.co/functions/v1/` | Serverless functions |
-
-## Webhooks
-
-- **N8N recibe:** `POST { session_id, session_name, situation, location, timestamp, triggered_from, warehouse, warehouse_id }`
-- **N8N responde:** `{ sync_run_id: string }` (UUID)
-- El proxy en Edge Function toma el payload del frontend y lo reenvía a N8N
-
-## Servicios Terceros
-
-- **Supabase:** Base de datos + Edge Functions + RPCs
-- **N8N:** Orquestador de workflows (instancia self-hosted en `sandboxn8n.mayoreo.biz`)
-- **WMS:** Sistema ERP externo (consultado por N8N, no directamente por el frontend)
-- **Google Fonts:** Inter (cargada via CDN en `index.html`)
-- **Remix Icon / Font Awesome:** Cargados via CDN en `index.html`
-
-## Dependencias Externas Críticas
-
-1. **Supabase** — si está caído, la app no funciona
-2. **N8N** — si está caído, no se puede sincronizar
-3. **WMS** — si está caído, N8N no puede extraer datos (las sincronizaciones fallarán)
+| URL | Almacén | Session ID |
+|-----|---------|------------|
+| `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh` | Patio Febeca | `4e2ed739-0f8f-475e-92af-aa8333e83efa` |
+| `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh1` | Febeca | `f6318dca-faca-47e5-bc4e-483929710493` |
+| `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh2` | Sillaca | `ccbf13c4-c0ac-4a7e-900e-bd2965a34339` |
+| `https://sandboxn8n.mayoreo.biz/webhook/tfi-refresh3` | Beval | `db053880-e067-4062-bd4c-c124e3ab20f0` |
 
 ---
 
@@ -1306,116 +1628,181 @@ El despliegue se hace a través de la plataforma **Readdy.ai**. El build output 
 
 ## Logs Importantes
 
-### Consola del Navegador
-- `[Supabase] getSyncRunById`, `getRunningSyncForSession`, `getLatestSyncRun`: Cada query de sync loguea parámetros y resultados
-- `[SyncLock] acquireSyncLock`, `releaseSyncLock`, `getSyncLocks`: Logs de locks con session_id y errores
-- `[N8N Webhook]`: URL, payload, HTTP status, response body, sync_run_id recibido
-- `[Poll] {warehouseName}`: Estado del polling (running, completado, huérfano)
-- `[Recovery] {warehouseName}`: Estado de locks al cargar la página (stale, huérfano, activo)
-- `[TFI]`: Logs de TfiRefreshControl (sync global)
-
-### Supabase
-- Tabla `tfi_webhook_debug_logs`: Logs de webhooks recibidos
-- Tabla `tfi_n8n_step_logs`: Logs de pasos de N8N
-- Tabla `tfi_sync_runs`: Estado de cada sync (running/completed/failed + error_message)
-- Tabla `tfi_sync_locks`: Estado actual de locks
-
-### N8N
-- Los workflows tienen sus propios logs en la UI de N8N
-- Auto-limpieza: syncs >60min se marcan como `failed`
+- `[SyncLifecycle]`: Logs del servicio de sync
+- `[Poll]`: Estado del polling cada 3 segundos
+- `[Recovery]`: Recovery al cargar la página
+- `[N8N Webhook]`: Disparo de webhook
+- `[Stop]`: Cancelación de sync
 
 ## Problemas Comunes
 
 | Problema | Causa Probable | Solución |
 |----------|---------------|----------|
-| "Ya existe una sincronización en curso" | Lock huérfano en `tfi_sync_locks` | Limpiar manualmente: `UPDATE tfi_sync_locks SET is_running = false WHERE session_id = '...'` |
-| "Sincronización atascada" (>60min) | N8N se colgó sin actualizar el sync run | El recovery lo limpia automáticamente al cargar la página |
-| Webhook responde 404 | URL del webhook incorrecta o N8N caído | Verificar URLs en `WarehouseSyncButtons.tsx` y estado de N8N |
-| Tabla vacía sin error | `session_id` no coincide con datos en Supabase | Verificar que la sesión seleccionada tenga datos en `tfi_count_lines` |
-| Diferencia entre dashboard y comparación | Límite de 1000 rows de Supabase | El dashboard usa `fetchAllPages` que trae todos; la UI usa queries directas con paginación visual |
-| sync_run_id inválido ("{{...}}") | N8N devolvió placeholder sin procesar | El frontend lo rechaza automáticamente (usa fallback por session_id) |
-
-## Cómo Diagnosticar Errores
-
-1. **Abrir DevTools (F12) → Console:** Buscar logs con prefijos `[Supabase]`, `[SyncLock]`, `[N8N Webhook]`, `[Poll]`, `[Recovery]`
-2. **Verificar Supabase:** SQL Editor → consultar `tfi_sync_runs`, `tfi_sync_locks`, `tfi_count_lines`
-3. **Verificar N8N:** UI de N8N → ver executions del workflow correspondiente
-4. **Verificar CORS:** Si el proxy falla, verificar que la Edge Function `n8n-webhook-proxy` esté desplegada
-
-## Puntos Críticos del Sistema
-
-1. **`v_tfi_comparison_lines`**: Si los datos no se ven, verificar que la vista esté correcta y tenga datos
-2. **`tfi_sync_locks.is_running`**: Estado `true` sin sync activo = lock huérfano
-3. **`tfi_sync_runs.status`**: Si queda en `running` >60min, es un sync zombie
-4. **Proxy CORS**: Si el proxy falla, ningún webhook funciona — verificar Edge Function en dashboard de Supabase
-5. **`refreshTrigger` en SessionContext**: Si los datos no se actualizan después de sync, verificar que `triggerRefresh()` se llame correctamente
+| Sync zombie | N8N no cerró sync_run | Frontend detecta `zombie`, permite reintentar |
+| Sync stale | N8N sin heartbeat | RPC detecta `stale` >10 min sin actividad |
+| Sync timeout | N8N >60 min | RPC detecta `timeout`, frontend detiene polling |
+| Lock huérfano | N8N liberó lock sin cerrar sync | `cleanup_zombie_syncs` limpia automáticamente |
+| Botón STOP no cancela | Sin syncRunId | Fallback a `releaseSyncLock` |
 
 ---
 
-# AI / DEVELOPER CONTEXT
+# SYNC FRONTEND RULES — DEFINITIVO (v94)
 
-## Reglas Importantes del Proyecto
+## Reglas Absolutas del Frontend
 
-1. **La lógica de negocio vive en Supabase views, NO en el frontend.** Si necesitás cambiar cómo se calcula `comparison_status`, `final_count_qty`, etc., modificá la vista SQL en Supabase.
-2. **El frontend solo consulta y muestra.** No recalcula métricas excepto los rankings (`calculateRankings`) y los conteos del dashboard.
-3. **Nunca modificar `src/router/index.ts`** — es de solo lectura. Las rutas se definen en `src/router/config.tsx`.
-4. **Nunca modificar `src/i18n/local/index.ts`** — es de solo lectura, auto-importa archivos de traducción.
-5. **Usar `import { X } from 'react'`** — prohibido `React.X`.
-6. **Usar `@/` para imports cross-directory** — prohibido `../`.
-7. **TypeScript estricto** — `npm run type-check` debe pasar sin errores.
+Las siguientes reglas son **OBLIGATORIAS** y no deben violarse nunca:
 
-## Convenciones de Código
+### 1. NUNCA mutar state directamente
+```typescript
+// ❌ PROHIBIDO
+state.branches['febeca'] = value;
+syncStates['febeca'] = value;
 
-- **Nombres:** camelCase para variables/funciones, PascalCase para componentes/interfaces, snake_case para columnas de BD
-- **Componentes:** Functional components con TypeScript interfaces para props
-- **Servicios:** Funciones async que retornan datos tipados, errores se propagan con `throw`
-- **Estilos:** TailwindCSS utility classes, NO CSS modules, NO styled-components
-- **Iconos:** Remix Icon (`ri-*`) y Font Awesome (`fa-*` o `fas fa-*`) via CDN
-- **Exportaciones:** Nombradas, NO default exports (excepto componentes de página)
-- **Archivos:** Máximo ~500 líneas por archivo
+// ✅ CORRECTO
+setSyncStates(prev => ({
+  ...prev,
+  [warehouseId]: {
+    ...(prev[warehouseId] ?? getInitialStateForId(warehouseId)),
+    ...newValues
+  }
+}));
+```
 
-## Cosas que NO se Deben Modificar
+### 2. NUNCA mutar el objeto que llega del backend
+```typescript
+// ❌ PROHIBIDO
+syncStatus.computed_message = 'otro mensaje';
 
-| Archivo | Razón |
-|---------|-------|
-| `src/router/index.ts` | Define `AppRoutes` y `navigatePromise` — estructura fija de Readdy |
-| `src/i18n/local/index.ts` | Auto-import de traducciones — estructura fija |
-| `index.html` (excepto SEO tags) | Estructura de Vite + CDNs |
-| `package.json devDependencies` | Fijo según el template de Readdy |
-| `vite.config.ts` (excepto `define` externals) | Configuración de build |
-| `tailwind.config.ts` (excepto `theme.extend`) | Configuración base |
+// ✅ CORRECTO — usar getSyncDisplayMessage()
+const msg = getSyncDisplayMessage(syncStatus); // crea mensaje nuevo sin mutar
+```
 
-## Dependencias Delicadas
+### 3. SIEMPRE inicializar refs con valor
+```typescript
+// ❌ PROHIBIDO — causa TypeError: Cannot set properties of undefined
+const pollIntervalsRef = useRef<Record<string, ReturnType<typeof setInterval>>>();
+// pollIntervalsRef.current['febeca'] = ... → CRASH porque current es undefined
 
-- **React 19** — NO downgradear. Si una dependencia pide React <19, buscar alternativa compatible.
-- **react-router-dom 7** — Algunas APIs cambiaron vs v6. Verificar compatibilidad.
-- **Supabase JS Client 2.57** — Usar `.maybeSingle()` en vez de `.single()` para evitar errores cuando no hay resultados.
-- **xlsx 0.18** — La exportación Excel usa formato AOA (Array of Arrays).
-- **TailwindCSS 3.4** — NO usar `@apply border-border` (no existe).
+// ✅ CORRECTO
+const pollIntervalsRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+// pollIntervalsRef.current['febeca'] = ... → funciona
+```
 
-## Flujo Recomendado para Agregar Nuevas Funcionalidades
+### 4. Backend es la única fuente de verdad
 
-1. **Identificar el tipo de cambio:**
-   - ¿Nueva página? → Crear `src/pages/[name]/page.tsx` + agregar ruta en `config.tsx`
-   - ¿Nuevo filtro/KPI? → Verificar si la vista SQL ya tiene los datos. Si no, modificar la vista primero.
-   - ¿Nueva integración? → Agregar función en `src/services/` + tipos en `src/types/`
-   - ¿Nuevo componente compartido? → `src/components/feature/` o `src/components/base/`
+- El estado `syncing` solo es válido si `get_sync_status_v2_single` lo devuelve
+- Si el backend devuelve `idle`, la UI debe mostrar `idle` inmediatamente
+- No hay estado local que "sobreviva" entre sessiones
 
-2. **Para nuevas páginas:**
-   - Crear carpeta en `src/pages/[name]/` con `page.tsx` y `components/` si necesario
-   - Usar `AppLayout` como wrapper
-   - Importar desde `@/context/SessionContext` para acceder a `selectedSession`
-   - Agregar ruta en `src/router/config.tsx` y link en `TopNav.tsx`
+### 5. Polling se detiene en estados terminales
 
-3. **Para nuevas queries a Supabase:**
-   - Agregar función en `src/services/tfi.service.ts`
-   - Agregar tipos en `src/types/tfi.types.ts`
-   - Si la query necesita superar 1000 rows, usar `fetchAllPages()`
+Los siguientes estados son **TERMINALES** y deben detener el polling INMEDIATAMENTE:
+- `completed`
+- `failed`
+- `cancelled`
+- `idle`
+- `stale`
+- `timeout`
+- `orphaned`
+- `zombie`
+- `partial_failure`
 
-4. **Verificar build:** `npm run type-check && npm run build`
+Solo los siguientes estados son **ACTIVOS** (el polling continúa):
+- `syncing`
+- `starting`
+- `queued`
+- `finishing`
 
-5. **Actualizar documentación:** Si el cambio es significativo, actualizar `project_plan.md` y `PROJECT_CONTEXT.md`
+### 6. Caso: minutes_since_last_n8n_step = 999999
 
----
+Si el backend devuelve `syncing` con `minutes_since_last_n8n_step = 999999`:
 
-> **Nota para IAs:** Este documento fue generado analizando el código fuente (versión 70), la base de datos Supabase, y el historial de cambios. Las secciones marcadas con **TODO** requieren información que no está disponible en el código fuente (típicamente la configuración de N8N y el esquema del WMS).
+```
+- Mostrar: "Esperando actividad de N8N..."
+- NO mostrar "Sincronizando..." ni "Iniciando..."
+- Si después de 3 minutos sigue sin heartbeat, N8N y sin rows → marcar stale
+- Detener polling si se marca stale (stale es terminal)
+```
+
+Implementado en `isDeadSync()` y `getSyncDisplayMessage()` en `sync-lifecycle.service.ts`.
+
+### 7. NO hay bloqueo global de warehouses
+
+- Cada card de warehouse solo verifica su propio `session_id`
+- Si Febeca está sincronizando, Sillaca puede sincronizar independientemente
+- Eliminado: `hasAnySyncRunning`, `lockedByOther`
+
+### 8. NO hay recovery desde localStorage/sessionStorage
+
+```typescript
+// ❌ PROHIBIDO
+const saved = localStorage.getItem('lastActiveWarehouse');
+const activeSyncRef = useRef<string | null>(null);
+
+// ✅ CORRECTO
+// Al montar: consultar backend ÚNICA VEZ
+// Si backend dice idle → UI idle (sin recovery)
+```
+
+### 9. Filas y ramas: solo mostrar si hay sync_run_id activo
+
+```typescript
+// ❌ PROHIBIDO — muestra "0 filas — 0/0 ramas" sin sync activo
+{isBusy && state.totalRows !== null && ...}
+
+// ✅ CORRECTO
+const hasActiveSyncRun = Boolean(state.syncRunId) && isActiveState(state.status);
+{hasActiveSyncRun && ...}
+```
+
+### 10. Errores: solo mostrar si pertenecen al sync actual
+
+```typescript
+// ❌ PROHIBIDO — muestra errores de syncs anteriores
+{state.error && <p>{state.error}</p>}
+
+// ✅ CORRECTO
+const showError = state.status === 'failed' && state.error && state.error !== state.message;
+{showError && <p>{state.error}</p>}
+```
+
+### 11. Al recibir `completed`
+
+```typescript
+if (status.computed_status === 'completed') {
+  clearPolling(warehouseId);    // detener polling
+  triggerRefresh();              // refrescar dashboard
+  showToast('...completada');    // notificar usuario
+  setTimeout(() => {
+    resetWarehouseState(warehouseId); // limpiar estado local tras 5s
+  }, 5000);
+}
+```
+
+### 12. Logs defensivos obligatorios
+
+```typescript
+// Branches undefined
+if (typeof status.branch_count !== 'number') {
+  console.warn('[WarehouseSync] branch_count is undefined from backend');
+}
+
+// Syncing sin sync_run_id
+if ((status.computed_status === 'syncing') && !status.sync_run_id) {
+  console.warn('[WarehouseSync] syncing/starting without sync_run_id');
+}
+
+// N8N silencio > 3 min
+if (status.minutes_since_last_n8n_step >= 999999 && ...) {
+  console.warn('[WarehouseSync] ... = 999999 for > 3min. Marking as dead.');
+}
+
+// Polling en estado terminal
+if (isTerminalState(status.computed_status)) {
+  console.log('[Poll] terminal state: ..., stopping polling');
+}
+```
+
+> **Nota para IAs:** Este documento fue actualizado en versión 98. La arquitectura de sync V2 es definitiva — el frontend NUNCA usa estado local para determinar si hay un sync activo. Ver sección "SYNC FRONTEND RULES — DEFINITIVO (v94)" para las reglas completas.
+>
+> **Comparación V2 tiene dos modos:** `compare` (A vs B, RPC `get_comparison_v2_f`) y `single_take` (solo A, RPC `get_take_lines_v2_f`). Si `take_b_name` es null → modo `single_take`. Si tiene valor → modo `compare`.

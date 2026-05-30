@@ -3,21 +3,36 @@ import AppLayout from '@/components/feature/AppLayout';
 import TakeSelector from './components/TakeSelector';
 import FilterBarV2 from './components/FilterBarV2';
 import ComparisonV2Table from './components/ComparisonV2Table';
+import ColumnSettings from './components/ColumnSettings';
 import LoadingState from '@/components/base/LoadingState';
 import ErrorState from '@/components/base/ErrorState';
 import ExportButtons from '@/components/feature/ExportButtons';
 import { useSession } from '@/context/SessionContext';
+import { useColumnConfig } from './hooks/useColumnConfig';
 import {
   getAvailableTakesV2,
   getComparisonV2,
+  getSingleTakeLinesV2,
 } from '@/services/comparison-v2.service';
 import { exportComparisonV2ToExcel } from '@/utils/exportToExcel';
 import { exportComparisonV2ToCsv } from '@/utils/exportToCsv';
-import type { AvailableTake, ComparisonV2Line, ComparisonV2Summary } from '@/types/comparison-v2.types';
+import type { AvailableTake, ComparisonV2Line, ComparisonV2Summary, ComparisonMode } from '@/types/comparison-v2.types';
 
 const PAGE_SIZE = 20;
 
-function computeSummary(lines: ComparisonV2Line[], totalCount: number): ComparisonV2Summary {
+function computeSummary(lines: ComparisonV2Line[], totalCount: number, mode: ComparisonMode): ComparisonV2Summary {
+  if (mode === 'single_take') {
+    return {
+      total: totalCount,
+      matches: lines.filter((l) => l.comparison_status === 'MATCH').length,
+      pending_recount: 0,
+      recount_match_a: 0,
+      recount_match_b: 0,
+      all_different: 0,
+      different: lines.filter((l) => l.comparison_status === 'DIFFERENT').length,
+      single_take: lines.filter((l) => l.comparison_status === 'SINGLE_TAKE').length,
+    };
+  }
   return {
     total: totalCount,
     matches: lines.filter((l) => l.comparison_status === 'MATCH').length,
@@ -26,6 +41,7 @@ function computeSummary(lines: ComparisonV2Line[], totalCount: number): Comparis
     recount_match_b: lines.filter((l) => l.comparison_status === 'RECOUNT_MATCH_B').length,
     all_different: lines.filter((l) => l.comparison_status === 'ALL_DIFFERENT').length,
     different: lines.filter((l) => l.comparison_status === 'DIFFERENT').length,
+    single_take: 0,
   };
 }
 
@@ -56,6 +72,14 @@ export default function ComparisonV2Page() {
 
   // Export
   const [exportLoading, setExportLoading] = useState(false);
+
+  // Mode
+  const mode: ComparisonMode = useMemo(() => {
+    return takeA && !takeB ? 'single_take' : 'compare';
+  }, [takeA, takeB]);
+
+  // Column config
+  const columnConfig = useColumnConfig(mode);
 
   // ─── Cargar tomas disponibles al cambiar sesión o fechas ─────────────────────────
   useEffect(() => {
@@ -89,29 +113,46 @@ export default function ComparisonV2Page() {
 
   // ─── Cargar datos cuando cambian las tomas o filtros ────────────────────
   const fetchData = useCallback(() => {
-    if (!selectedSession || !takeA || !takeB) return;
+    if (!selectedSession || !takeA) return;
 
     setDataLoading(true);
     setDataError(null);
 
-    getComparisonV2({
-      session_id: selectedSession,
-      take_a_name: takeA,
-      take_b_name: takeB,
-      article_search: articleSearch || undefined,
-      status_filter: statusFilter || undefined,
-      page,
-      page_size: PAGE_SIZE,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    })
-      .then(({ lines: data, totalCount: tc }) => {
-        setLines(data);
-        setTotalCount(tc);
+    if (mode === 'single_take') {
+      getSingleTakeLinesV2({
+        session_id: selectedSession,
+        take_name: takeA,
+        article_search: articleSearch || undefined,
+        status_filter: statusFilter || undefined,
+        page,
+        page_size: PAGE_SIZE,
       })
-      .catch((err) => setDataError(err?.message ?? 'Error al cargar comparación'))
-      .finally(() => setDataLoading(false));
-  }, [selectedSession, takeA, takeB, articleSearch, statusFilter, page, dateFrom, dateTo]);
+        .then(({ lines: data, totalCount: tc }) => {
+          setLines(data);
+          setTotalCount(tc);
+        })
+        .catch((err) => setDataError(err?.message ?? 'Error al cargar toma'))
+        .finally(() => setDataLoading(false));
+    } else {
+      getComparisonV2({
+        session_id: selectedSession,
+        take_a_name: takeA,
+        take_b_name: takeB,
+        article_search: articleSearch || undefined,
+        status_filter: statusFilter || undefined,
+        page,
+        page_size: PAGE_SIZE,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      })
+        .then(({ lines: data, totalCount: tc }) => {
+          setLines(data);
+          setTotalCount(tc);
+        })
+        .catch((err) => setDataError(err?.message ?? 'Error al cargar comparación'))
+        .finally(() => setDataLoading(false));
+    }
+  }, [selectedSession, takeA, takeB, articleSearch, statusFilter, page, dateFrom, dateTo, mode]);
 
   useEffect(() => {
     fetchData();
@@ -122,7 +163,7 @@ export default function ComparisonV2Page() {
     setPage(1);
   }, [articleSearch, statusFilter, takeA, takeB, dateFrom, dateTo]);
 
-  const summary = useMemo(() => computeSummary(lines, totalCount), [lines, totalCount]);
+  const summary = useMemo(() => computeSummary(lines, totalCount, mode), [lines, totalCount, mode]);
 
   // Session name map for export
   const sessionNameMap = useMemo(() => {
@@ -139,32 +180,33 @@ export default function ComparisonV2Page() {
   };
 
   const handleExport = async (format: 'excel' | 'csv') => {
-    if (!selectedSession || !takeA || !takeB) return;
+    if (!selectedSession || !takeA) return;
     setExportLoading(true);
     try {
       const { getAllComparisonV2ForExport } = await import('@/services/comparison-v2.service');
       const allRows = await getAllComparisonV2ForExport({
         session_id: selectedSession,
         take_a_name: takeA,
-        take_b_name: takeB,
+        take_b_name: mode === 'single_take' ? null : takeB,
         article_search: articleSearch || undefined,
         status_filter: statusFilter || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
       const sessionLabel = sessionNameMap[selectedSession] ?? selectedSession;
-      const title = `${takeA} vs ${takeB}`;
+      const title = mode === 'single_take' ? `${takeA} — Solo Toma A` : `${takeA} vs ${takeB}`;
+      const visibleCols = columnConfig.visibleColumns();
       if (format === 'excel') {
-        exportComparisonV2ToExcel(allRows, title, sessionLabel);
+        exportComparisonV2ToExcel(allRows, title, sessionLabel, mode, visibleCols);
       } else {
-        exportComparisonV2ToCsv(allRows, title, sessionLabel);
+        exportComparisonV2ToCsv(allRows, title, sessionLabel, mode, visibleCols);
       }
     } finally {
       setExportLoading(false);
     }
   };
 
-  const showContent = takeA && takeB;
+  const showContent = Boolean(takeA);
 
   const dateRangeLabel = useMemo(() => {
     if (dateFrom && dateTo) return `${dateFrom} al ${dateTo}`;
@@ -182,10 +224,16 @@ export default function ComparisonV2Page() {
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Comparación Dinámica</h1>
             <p className="text-sm text-gray-500 mt-1">
               Comparación basada en tomas seleccionadas — arquitectura normalizada v2
-              {takeA && takeB && (
+              {mode === 'compare' && takeA && takeB && (
                 <span className="ml-2 text-emerald-600 font-medium">
                   <i className="ri-arrow-left-right-line mr-1"></i>
                   {takeA} vs {takeB}
+                </span>
+              )}
+              {mode === 'single_take' && takeA && (
+                <span className="ml-2 text-emerald-600 font-medium">
+                  <i className="ri-eye-line mr-1"></i>
+                  {takeA} — Solo Toma A
                 </span>
               )}
               {dateRangeLabel && (
@@ -203,19 +251,25 @@ export default function ComparisonV2Page() {
                   <i className="ri-file-list-3-line text-emerald-600"></i>
                   <strong className="text-gray-700">{totalCount}</strong> líneas
                 </span>
-                <span className="h-4 w-px bg-gray-200"></span>
-                <span className="flex items-center gap-1.5">
-                  <i className="ri-time-line text-amber-500"></i>
-                  <strong className="text-amber-700">{summary.pending_recount}</strong> pendientes
-                </span>
+                {mode === 'compare' && (
+                  <span className="h-4 w-px bg-gray-200"></span>
+                )}
+                {mode === 'compare' && (
+                  <span className="flex items-center gap-1.5">
+                    <i className="ri-time-line text-amber-500"></i>
+                    <strong className="text-amber-700">{summary.pending_recount}</strong> pendientes
+                  </span>
+                )}
               </div>
             )}
-            <ExportButtons
-              disabled={!showContent || lines.length === 0}
-              loading={dataLoading || exportLoading}
-              onExcelExport={() => handleExport('excel')}
-              onCsvExport={() => handleExport('csv')}
-            />
+            <div className="flex items-center gap-2">
+              <ExportButtons
+                disabled={!showContent || lines.length === 0}
+                loading={dataLoading || exportLoading}
+                onExcelExport={() => handleExport('excel')}
+                onCsvExport={() => handleExport('csv')}
+              />
+            </div>
           </div>
         </div>
 
@@ -285,6 +339,7 @@ export default function ComparisonV2Page() {
               onArticleSearchChange={setArticleSearch}
               onStatusFilterChange={setStatusFilter}
               onReset={handleReset}
+              mode={mode}
             />
           </div>
         )}
@@ -294,26 +349,61 @@ export default function ComparisonV2Page() {
 
         {/* Loading */}
         {dataLoading && !dataError && showContent && (
-          <LoadingState message="Cargando comparación dinámica..." rows={8} />
+          <LoadingState message={mode === 'single_take' ? "Cargando toma A..." : "Cargando comparación dinámica..."} rows={8} />
         )}
 
         {/* Content */}
         {!dataLoading && !dataError && showContent && (
           <>
-            {/* Summary pills */}
-            <div className="flex flex-wrap gap-2 mb-4">
-              {[
-                { label: 'Total', value: summary.total, color: 'text-gray-600 bg-gray-100' },
-                { label: 'MATCH', value: summary.matches, color: 'text-emerald-700 bg-emerald-50 border border-emerald-200' },
-                { label: 'Pend. Reconteo', value: summary.pending_recount, color: 'text-amber-700 bg-amber-50 border border-amber-200' },
-                { label: 'Rec. Match A', value: summary.recount_match_a, color: 'text-sky-700 bg-sky-50 border border-sky-200' },
-                { label: 'Rec. Match B', value: summary.recount_match_b, color: 'text-indigo-700 bg-indigo-50 border border-indigo-200' },
-                { label: 'Todos Diff.', value: summary.all_different, color: 'text-red-700 bg-red-50 border border-red-200' },
-              ].map((s) => (
-                <span key={s.label} className={`text-xs font-semibold px-3 py-1 rounded-full ${s.color}`}>
-                  {s.label}: {s.value}
-                </span>
-              ))}
+            {/* Summary pills + column controls */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex flex-wrap gap-2">
+                {mode === 'compare' ? (
+                  [
+                    { label: 'Total', value: summary.total, color: 'text-gray-600 bg-gray-100' },
+                    { label: 'MATCH', value: summary.matches, color: 'text-emerald-700 bg-emerald-50 border border-emerald-200' },
+                    { label: 'Pend. Reconteo', value: summary.pending_recount, color: 'text-amber-700 bg-amber-50 border border-amber-200' },
+                    { label: 'Rec. Match A', value: summary.recount_match_a, color: 'text-sky-700 bg-sky-50 border border-sky-200' },
+                    { label: 'Rec. Match B', value: summary.recount_match_b, color: 'text-indigo-700 bg-indigo-50 border border-indigo-200' },
+                    { label: 'Todos Diff.', value: summary.all_different, color: 'text-red-700 bg-red-50 border border-red-200' },
+                  ].map((s) => (
+                    <span key={s.label} className={`text-xs font-semibold px-3 py-1 rounded-full ${s.color}`}>
+                      {s.label}: {s.value}
+                    </span>
+                  ))
+                ) : (
+                  [
+                    { label: 'Total', value: summary.total, color: 'text-gray-600 bg-gray-100' },
+                    { label: 'MATCH', value: summary.matches, color: 'text-emerald-700 bg-emerald-50 border border-emerald-200' },
+                    { label: 'Different', value: summary.different, color: 'text-red-700 bg-red-50 border border-red-200' },
+                    { label: 'Solo Toma A', value: summary.single_take, color: 'text-emerald-700 bg-emerald-50 border border-emerald-200' },
+                  ].map((s) => (
+                    <span key={s.label} className={`text-xs font-semibold px-3 py-1 rounded-full ${s.color}`}>
+                      {s.label}: {s.value}
+                    </span>
+                  ))
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <button
+                    onClick={() => columnConfig.setShowSettings(!columnConfig.showSettings)}
+                    className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 bg-white border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-layout-column-line"></i>
+                    Columnas
+                  </button>
+                  {columnConfig.showSettings && (
+                    <ColumnSettings
+                      hidden={columnConfig.hidden}
+                      onToggle={columnConfig.toggleColumn}
+                      onReset={columnConfig.resetLayout}
+                      onClose={() => columnConfig.setShowSettings(false)}
+                      mode={mode}
+                    />
+                  )}
+                </div>
+              </div>
             </div>
 
             <ComparisonV2Table
@@ -322,6 +412,15 @@ export default function ComparisonV2Page() {
               page={page}
               pageSize={PAGE_SIZE}
               onPageChange={setPage}
+              mode={mode}
+              visibleColumns={columnConfig.visibleColumns()}
+              hiddenColumns={columnConfig.hidden}
+              order={columnConfig.order}
+              isSticky={columnConfig.isSticky}
+              getStickyOffset={columnConfig.getStickyOffset}
+              moveColumn={columnConfig.moveColumn}
+              setDraggingId={columnConfig.setDraggingId}
+              draggingId={columnConfig.draggingId}
             />
           </>
         )}
@@ -330,9 +429,9 @@ export default function ComparisonV2Page() {
         {!showContent && !takesLoading && !takesError && (
           <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
             <i className="ri-arrow-left-right-line text-5xl text-gray-200 block mb-4"></i>
-            <h3 className="text-lg font-semibold text-gray-600 mb-2">Seleccioná dos tomas para comparar</h3>
+            <h3 className="text-lg font-semibold text-gray-600 mb-2">Seleccioná una toma para comenzar</h3>
             <p className="text-sm text-gray-400 max-w-md mx-auto">
-              Elegí Toma A y Toma B de las opciones disponibles arriba para ver la comparación lado a lado con la nueva arquitectura normalizada.
+              Elegí Toma A para ver sus registros individualmente, o seleccioná Toma A y Toma B para comparar lado a lado.
               {dateRangeLabel && (
                 <span className="block mt-2 text-sky-600">
                   <i className="ri-calendar-line mr-1"></i>

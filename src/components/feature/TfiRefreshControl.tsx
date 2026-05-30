@@ -1,132 +1,139 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSession } from '@/context/SessionContext';
 import { triggerTfiRefresh, WebhookError } from '@/services/n8n.service';
-import { getSyncRunById, getRunningSyncForSession, getLatestSyncRun, getAvailableSituations } from '@/services/tfi.service';
-import type { TfiSyncRun } from '@/types/tfi.types';
+import {
+  cancelSyncRun,
+  forceReleaseSyncLock,
+  cleanupZombieSyncs,
+  releaseSyncLock,
+  isActiveState,
+  isProblemState,
+  isCancellableState,
+  formatElapsed,
+  hasMissingHeartbeat,
+  hasStaleHeartbeat,
+} from '@/services/sync-lifecycle.service';
+import { getAvailableSituations } from '@/services/tfi.service';
+import { useSyncPolling } from '@/hooks/useSyncPolling';
+import type { SyncStatusResult, ComputedSyncStatus } from '@/types/tfi.types';
 
-type SyncState = 'idle' | 'starting' | 'syncing' | 'success' | 'error';
-
-const POLL_INTERVAL_MS = 3000;
-const SYNC_TIMEOUT_MINUTES = 60;
-const MAX_SYNC_DURATION_MS = SYNC_TIMEOUT_MINUTES * 60 * 1000;
-const SLOW_SYNC_WARNING_MS = 10 * 60 * 1000;
-const FALLBACK_MAX_MS = 15 * 1000;
-const STALE_RUNNING_MINUTES = 60;
-
-const LS_KEY_SYNC_RUN_ID = 'tfi_active_sync_run_id';
-const LS_KEY_SYNC_SESSION_ID = 'tfi_active_sync_session_id';
-const LS_KEY_SYNC_STARTED_AT = 'tfi_active_sync_started_at';
-
-function clearLocalStorageSync() {
-  localStorage.removeItem(LS_KEY_SYNC_RUN_ID);
-  localStorage.removeItem(LS_KEY_SYNC_SESSION_ID);
-  localStorage.removeItem(LS_KEY_SYNC_STARTED_AT);
-  console.log('[TFI] limpiando sync local');
-}
-
-function saveLocalStorageSync(syncRunId: string, sessionId: string, startedAt: string) {
-  localStorage.setItem(LS_KEY_SYNC_RUN_ID, syncRunId);
-  localStorage.setItem(LS_KEY_SYNC_SESSION_ID, sessionId);
-  localStorage.setItem(LS_KEY_SYNC_STARTED_AT, startedAt);
-  console.log('[TFI] sync_run_id guardado en localStorage:', syncRunId);
-}
-
-function loadLocalStorageSync(): { syncRunId: string | null; sessionId: string | null; startedAt: string | null } {
-  return {
-    syncRunId: localStorage.getItem(LS_KEY_SYNC_RUN_ID),
-    sessionId: localStorage.getItem(LS_KEY_SYNC_SESSION_ID),
-    startedAt: localStorage.getItem(LS_KEY_SYNC_STARTED_AT),
-  };
-}
-
-function isRunningStale(syncRun: TfiSyncRun): boolean {
-  const started = new Date(syncRun.started_at).getTime();
-  const elapsedMinutes = (Date.now() - started) / (1000 * 60);
-  return elapsedMinutes > STALE_RUNNING_MINUTES;
-}
-
-function formatWebhookError(err: unknown): { userMessage: string; logDetails: string } {
+function formatWebhookError(err: unknown): { userMessage: string } {
   if (err instanceof WebhookError) {
     if (err.status !== undefined) {
       const status = err.status;
-      const bodyPreview = err.responseBody?.slice(0, 200) ?? 'sin body';
-      const logDetails = `HTTP ${status} — body: ${bodyPreview}`;
-
-      if (status === 404) {
-        return {
-          userMessage: `Webhook respondió 404: el endpoint no existe en N8N. Revisá la URL del webhook.`,
-          logDetails,
-        };
-      }
-      if (status === 401 || status === 403) {
-        return {
-          userMessage: `Webhook respondió ${status}: sin autorización. Revisá las credenciales o tokens del webhook.`,
-          logDetails,
-        };
-      }
-      if (status >= 500) {
-        return {
-          userMessage: `Webhook respondió ${status}: error interno en N8N. Revisá el workflow en el editor de N8N.`,
-          logDetails,
-        };
-      }
-      return {
-        userMessage: `Webhook respondió ${status}: ${err.message}`,
-        logDetails,
-      };
+      if (status === 404) return { userMessage: `Webhook respondió 404: endpoint no existe en N8N.` };
+      if (status === 401 || status === 403) return { userMessage: `Webhook respondió ${status}: sin autorización.` };
+      if (status >= 500) return { userMessage: `Webhook respondió ${status}: error interno en N8N.` };
+      return { userMessage: `Webhook respondió ${status}: ${err.message}` };
     }
-
-    return {
-      userMessage: err.message,
-      logDetails: err.message,
-    };
+    return { userMessage: err.message };
   }
-
-  if (err instanceof Error) {
-    return {
-      userMessage: `Error inesperado: ${err.message}`,
-      logDetails: err.message,
-    };
-  }
-
-  return {
-    userMessage: 'Error desconocido al iniciar la sincronización.',
-    logDetails: String(err),
-  };
+  if (err instanceof Error) return { userMessage: `Error inesperado: ${err.message}` };
+  return { userMessage: 'Error desconocido al iniciar la sincronización.' };
 }
 
-function formatSupabaseError(err: unknown): { userMessage: string; logDetails: string } {
-  if (err instanceof Error) {
-    return {
-      userMessage: 'Error al consultar el estado de sincronización en Supabase.',
-      logDetails: err.message,
-    };
-  }
-  return {
-    userMessage: 'Error desconocido al consultar Supabase.',
-    logDetails: String(err),
+function statusLabel(status: ComputedSyncStatus): string {
+  const labels: Record<ComputedSyncStatus, string> = {
+    idle: 'Listo',
+    queued: 'En cola',
+    starting: 'Iniciando',
+    syncing: 'Sincronizando',
+    finishing: 'Finalizando',
+    completed: 'Completado',
+    failed: 'Error',
+    cancelled: 'Cancelado',
+    stale: 'Atascado',
+    timeout: 'Timeout',
+    orphaned: 'Huérfano',
+    zombie: 'Zombie',
+    partial_failure: 'Parcial',
   };
+  return labels[status] ?? status;
+}
+
+function statusColor(status: ComputedSyncStatus): { bg: string; text: string; border: string; badge: string } {
+  switch (status) {
+    case 'completed': return { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', badge: 'bg-emerald-100 text-emerald-700' };
+    case 'failed': return { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', badge: 'bg-red-100 text-red-700' };
+    case 'cancelled': return { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200', badge: 'bg-gray-100 text-gray-600' };
+    case 'stale': return { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', badge: 'bg-amber-100 text-amber-700' };
+    case 'timeout': return { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200', badge: 'bg-orange-100 text-orange-700' };
+    case 'orphaned': return { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200', badge: 'bg-gray-100 text-gray-600' };
+    case 'zombie': return { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200', badge: 'bg-gray-100 text-gray-600' };
+    case 'partial_failure': return { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', badge: 'bg-amber-100 text-amber-700' };
+    case 'syncing':
+    case 'starting':
+    case 'finishing': return { bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200', badge: 'bg-sky-100 text-sky-700' };
+    case 'queued': return { bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200', badge: 'bg-sky-100 text-sky-700' };
+    default: return { bg: 'bg-white', text: 'text-gray-600', border: 'border-gray-200', badge: 'bg-gray-100 text-gray-600' };
+  }
 }
 
 export default function TfiRefreshControl() {
   const { selectedSession, sessions, selectedSituation, setSelectedSituation, triggerRefresh } = useSession();
-  const [syncState, setSyncState] = useState<SyncState>('idle');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [availableSituations, setAvailableSituations] = useState<string[]>(['TODOS']);
-  const [externalRunningNotice, setExternalRunningNotice] = useState<string | null>(null);
-
-  const isStartingRef = useRef(false);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const currentSyncRunIdRef = useRef<string | null>(null);
-  const fallbackUntilRef = useRef<number>(0);
-  const fallbackSessionIdRef = useRef<string | null>(null);
-  const fallbackSafetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [slowSyncWarning, setSlowSyncWarning] = useState(false);
-  const slowSyncWarnedRef = useRef(false);
 
   const activeSession = sessions.find((s) => s.id === selectedSession) ?? null;
 
-  // Cargar situaciones disponibles dinámicamente según la sesión activa
+  // ── Centralized polling via useSyncPolling ────────────────────────────────
+  const { status: rawStatus, startPolling, stopPolling } = useSyncPolling(activeSession?.id ?? null);
+
+  // ── Local state ────────────────────────────────────────────────────────────
+  const [localStarting, setLocalStarting] = useState(false);
+  const syncRunIdRef = useRef<string | null>(null);
+
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
+  const [availableSituations, setAvailableSituations] = useState<string[]>(['TODOS']);
+  const [showForceModal, setShowForceModal] = useState(false);
+  const [forceLoading, setForceLoading] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+
+  const mountedRef = useRef(true);
+  const prevStatusRef = useRef<ComputedSyncStatus | null>(null);
+
+  // Derive effective status: use localStarting before backend confirms
+  const backendStatus: ComputedSyncStatus = rawStatus?.computed_status ?? 'idle';
+  const effectiveStatus: ComputedSyncStatus = localStarting && backendStatus === 'idle' ? 'starting' : backendStatus;
+
+  // ── React to status transitions ───────────────────────────────────────────
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const current = effectiveStatus;
+    if (prev === current) return;
+    prevStatusRef.current = current;
+    if (!mountedRef.current) return;
+
+    if (current === 'completed') {
+      showToastMsg('Sincronización completada. Recargando datos...', 'success');
+      triggerRefresh();
+      setLocalStarting(false);
+      syncRunIdRef.current = null;
+    } else if (current === 'failed') {
+      const err = rawStatus?.sync_run_error_message ?? 'Error desconocido';
+      showToastMsg(`Sincronización fallida: ${err}`, 'error');
+      setLocalStarting(false);
+      syncRunIdRef.current = null;
+    } else if (current === 'cancelled') {
+      showToastMsg('Sincronización cancelada', 'warning');
+      setLocalStarting(false);
+      syncRunIdRef.current = null;
+    } else if (['stale', 'timeout', 'zombie', 'orphaned', 'partial_failure'].includes(current)) {
+      setLocalStarting(false);
+    }
+
+    // Clear localStarting once backend confirms any non-idle state
+    if (current !== 'idle' && localStarting) {
+      setLocalStarting(false);
+    }
+  }, [effectiveStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // ── Load situations ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedSession) {
       setAvailableSituations(['TODOS']);
@@ -139,367 +146,181 @@ export default function TfiRefreshControl() {
           setSelectedSituation('TODOS');
         }
       })
-      .catch((err) => {
-        console.error('[TFI] Error cargando situaciones disponibles:', err);
-        setAvailableSituations(['TODOS']);
-      });
-  }, [selectedSession]);
+      .catch(() => setAvailableSituations(['TODOS']));
+  }, [selectedSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const showToast = useCallback((message: string, type: 'success' | 'error') => {
+  // ── Toast helper ────────────────────────────────────────────────────────────
+  const showToastMsg = useCallback((message: string, type: 'success' | 'error' | 'warning') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => { if (mountedRef.current) setToast(null); }, 4000);
   }, []);
 
-  const clearTimers = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    if (fallbackSafetyTimerRef.current) {
-      clearTimeout(fallbackSafetyTimerRef.current);
-      fallbackSafetyTimerRef.current = null;
-    }
-  }, []);
-
-  const stopPolling = useCallback(() => {
-    clearTimers();
-    currentSyncRunIdRef.current = null;
-    fallbackUntilRef.current = 0;
-    fallbackSessionIdRef.current = null;
-    slowSyncWarnedRef.current = false;
-    setSlowSyncWarning(false);
-    setExternalRunningNotice(null);
-  }, [clearTimers]);
-
-  const evaluateSyncRun = useCallback((syncRun: TfiSyncRun | null): 'keep-polling' | 'completed' | 'failed' => {
-    if (!syncRun) return 'failed';
-    if (syncRun.status === 'running') return 'keep-polling';
-    if (syncRun.status === 'completed') return 'completed';
-    if (syncRun.status === 'failed') return 'failed';
-    return 'failed';
-  }, []);
-
-  const processPollingResult = useCallback(
-    (result: 'keep-polling' | 'completed' | 'failed', syncRun: TfiSyncRun | null) => {
-      if (result === 'keep-polling') {
-        setSyncState('syncing');
-        return;
-      }
-
-      stopPolling();
-
-      if (result === 'completed') {
-        clearLocalStorageSync();
-        setSyncState('success');
-        showToast('Sincronización completada. Recargando datos...', 'success');
-        triggerRefresh();
-        setTimeout(() => setSyncState('idle'), 3000);
-        return;
-      }
-
-      clearLocalStorageSync();
-      setSyncState('error');
-      const errorMsg = syncRun?.error_message?.trim();
-      if (errorMsg) {
-        showToast(`Sincronización fallida en N8N: ${errorMsg.slice(0, 120)}`, 'error');
-      } else {
-        showToast('La sincronización en N8N falló sin mensaje de error.', 'error');
-      }
-      setTimeout(() => setSyncState('idle'), 4000);
-    },
-    [stopPolling, showToast, triggerRefresh]
-  );
-
-  const checkSyncStatusById = useCallback(async () => {
-    const syncRunId = currentSyncRunIdRef.current;
-    if (!syncRunId) {
-      console.warn('[TFI] checkSyncStatusById llamado sin syncRunId en ref');
-      return;
-    }
-
-    try {
-      console.log('[TFI] Sync status by ID:', syncRunId);
-      const syncRun = await getSyncRunById(syncRunId);
-      console.log('[TFI] Sync status result:', syncRun?.status ?? 'null');
-
-      if (syncRun && syncRun.status === 'running') {
-        const elapsed = Date.now() - new Date(syncRun.started_at).getTime();
-        if (elapsed > SLOW_SYNC_WARNING_MS && !slowSyncWarnedRef.current) {
-          slowSyncWarnedRef.current = true;
-          setSlowSyncWarning(true);
-        }
-      }
-
-      const result = evaluateSyncRun(syncRun);
-      processPollingResult(result, syncRun);
-    } catch (err) {
-      clearTimers();
-      const { userMessage, logDetails } = formatSupabaseError(err);
-      console.error('[TFI] Error en polling por ID:', logDetails);
-      clearLocalStorageSync();
-      setSyncState('error');
-      showToast(userMessage, 'error');
-      setTimeout(() => setSyncState('idle'), 4000);
-    }
-  }, [evaluateSyncRun, processPollingResult, clearTimers, showToast]);
-
-  const checkSyncStatusBySession = useCallback(
-    async (sessionId: string) => {
-      try {
-        console.log('[TFI] Fallback: consultando running por sesión:', sessionId);
-        const running = await getRunningSyncForSession(sessionId);
-
-        if (running) {
-          console.log('[TFI] Fallback encontró running con id:', running.id);
-
-          if (isRunningStale(running)) {
-            console.warn(
-              `[TFI] Fallback running es stale (${STALE_RUNNING_MINUTES}min+), deteniendo polling:`
-            );
-            stopPolling();
-            setSyncState('idle');
-            showToast(
-              'Había una sincronización anterior incompleta. Podés iniciar una nueva.',
-              'error'
-            );
-            return;
-          }
-
-          currentSyncRunIdRef.current = running.id;
-          fallbackUntilRef.current = 0;
-          fallbackSessionIdRef.current = null;
-          if (fallbackSafetyTimerRef.current) {
-            clearTimeout(fallbackSafetyTimerRef.current);
-            fallbackSafetyTimerRef.current = null;
-          }
-          const result = evaluateSyncRun(running);
-          processPollingResult(result, running);
-          return;
-        }
-
-        if (fallbackUntilRef.current > 0 && Date.now() < fallbackUntilRef.current) {
-          console.log('[TFI] Fallback: aún esperando running...');
-          return;
-        }
-
-        const latest = await getLatestSyncRun(sessionId);
-        const result = evaluateSyncRun(latest);
-        processPollingResult(result, latest);
-      } catch (err) {
-        stopPolling();
-        const { userMessage, logDetails } = formatSupabaseError(err);
-        console.error('[TFI] Error en polling de sync status por sesión:', logDetails);
-        setSyncState('error');
-        showToast(userMessage, 'error');
-        setTimeout(() => setSyncState('idle'), 4000);
-      }
-    },
-    [evaluateSyncRun, processPollingResult, stopPolling, showToast]
-  );
-
-  const startPollingById = useCallback(
-    (syncRunId: string) => {
-      clearTimers();
-      slowSyncWarnedRef.current = false;
-      setSlowSyncWarning(false);
-      currentSyncRunIdRef.current = syncRunId;
-      setSyncState('syncing');
-      console.log('[TFI] startPollingById:', syncRunId);
-      checkSyncStatusById();
-      pollIntervalRef.current = setInterval(() => {
-        checkSyncStatusById();
-      }, POLL_INTERVAL_MS);
-    },
-    [clearTimers, checkSyncStatusById]
-  );
-
-  const startPollingBySession = useCallback(
-    (sessionId: string) => {
-      clearTimers();
-      console.log('[TFI] startPollingBySession (fallback):', sessionId);
-      checkSyncStatusBySession(sessionId);
-      pollIntervalRef.current = setInterval(() => {
-        checkSyncStatusBySession(sessionId);
-      }, POLL_INTERVAL_MS);
-    },
-    [clearTimers, checkSyncStatusBySession]
-  );
-
-  // Al montar o cambiar de sesión: reanudar polling SOLO si hay un sync_run_id
-  // guardado en localStorage por este mismo frontend. NUNCA engancharse a un
-  // running externo solo porque comparte session_id.
-  useEffect(() => {
-    if (!activeSession?.id) return;
-
-    const resumeLocalSync = async () => {
-      if (isStartingRef.current) return;
-
-      const local = loadLocalStorageSync();
-      if (!local.syncRunId) {
-        console.log('[TFI] no hay sync local activo, no se monitorea running externo');
-        return;
-      }
-
-      // Validar que el sync guardado pertenezca a la sesión actual
-      if (local.sessionId && local.sessionId !== activeSession.id) {
-        console.log('[TFI] sync local pertenece a otra sesión, ignorando:', local.syncRunId);
-        clearLocalStorageSync();
-        return;
-      }
-
-      try {
-        console.log('[TFI] reanudando polling desde localStorage:', local.syncRunId);
-        const syncRun = await getSyncRunById(local.syncRunId);
-
-        if (!syncRun) {
-          console.warn('[TFI] sync_run_id en localStorage no existe en DB, limpiando:', local.syncRunId);
-          clearLocalStorageSync();
-          return;
-        }
-
-        if (syncRun.status === 'running') {
-          if (isRunningStale(syncRun)) {
-            console.warn('[TFI] sync local stale detectado, limpiando:', local.syncRunId);
-            clearLocalStorageSync();
-            showToast('Había una sincronización anterior incompleta. Podés iniciar una nueva.', 'error');
-            return;
-          }
-          setSyncState('syncing');
-          startPollingById(local.syncRunId);
-        } else if (syncRun.status === 'completed' || syncRun.status === 'failed') {
-          console.log('[TFI] sync local ya finalizó, limpiando:', local.syncRunId);
-          clearLocalStorageSync();
-          // No iniciar polling, dejar botón libre
-        } else {
-          console.warn('[TFI] sync local con estado desconocido, limpiando:', syncRun.status);
-          clearLocalStorageSync();
-        }
-      } catch (err) {
-        const { logDetails } = formatSupabaseError(err);
-        console.error('[TFI] Error al reanudar sync desde localStorage:', logDetails);
-        clearLocalStorageSync();
-      }
-    };
-
-    resumeLocalSync();
-
-    return () => {
-      stopPolling();
-    };
-  }, [activeSession?.id, startPollingById, stopPolling]);
-
-  const handleSituationChange = (value: string) => {
-    setSelectedSituation(value);
-  };
-
-  const handleRefresh = async () => {
+  // ── Handle refresh ────────────────────────────────────────────────────────
+  const handleRefresh = useCallback(async () => {
     if (!activeSession) {
-      showToast('No hay sesión seleccionada', 'error');
+      showToastMsg('No hay sesión seleccionada', 'error');
       return;
     }
 
-    if (isStartingRef.current) {
-      showToast('Ya se está procesando una solicitud. Por favor espera.', 'error');
+    if (isActiveState(effectiveStatus)) {
+      showToastMsg('Ya hay una sincronización en curso.', 'warning');
       return;
     }
 
-    if (syncState === 'syncing' || syncState === 'starting') {
-      showToast('Ya hay una sincronización en curso. Por favor espera.', 'error');
-      return;
+    // If problem state, release first
+    if (isProblemState(effectiveStatus)) {
+      console.log('[TfiRefreshControl] Problem state before sync:', effectiveStatus, '— releasing lock first');
+      await releaseSyncLock(activeSession.id, `Reintento manual: estado anterior era ${effectiveStatus}`).catch(() => {});
     }
 
-    isStartingRef.current = true;
-    setSyncState('starting');
-    setExternalRunningNotice(null);
-    stopPolling();
+    const tempSyncRunId = crypto.randomUUID();
+    syncRunIdRef.current = tempSyncRunId;
+
+    // Optimistic local state
+    setLocalStarting(true);
+
+    const payload = {
+      session_id: activeSession.id,
+      session_name: activeSession.name,
+      location: activeSession.location,
+      situation: selectedSituation,
+      triggered_from: 'TFI_FRONTEND',
+      timestamp: new Date().toISOString(),
+      sync_run_id: tempSyncRunId,
+    };
 
     try {
-      // Verificar si hay un running externo SOLO para informar, nunca secuestrar
-      try {
-        const externalRunning = await getRunningSyncForSession(activeSession.id);
-        if (externalRunning) {
-          // Solo si NO es el que tenemos guardado en localStorage
-          const local = loadLocalStorageSync();
-          if (local.syncRunId !== externalRunning.id) {
-            const msg = 'Hay una sincronización externa en curso, pero podés iniciar una nueva si es necesario.';
-            console.log('[TFI]', msg, 'ID externo:', externalRunning.id);
-            setExternalRunningNotice(msg);
-          }
-        }
-      } catch (e) {
-        // Ignorar error en la consulta informativa
-      }
-
-      const payload = {
-        session_id: activeSession.id,
-        session_name: activeSession.name,
-        location: activeSession.location,
-        situation: selectedSituation,
-        triggered_from: 'TFI_FRONTEND',
-        timestamp: new Date().toISOString(),
-      };
-
-      console.log('[TFI Refresh] Payload enviado a N8N:', payload);
-
-      const returnedSyncRunId = await triggerTfiRefresh(payload);
+      const returnedSyncRunId = await triggerTfiRefresh(payload, undefined, tempSyncRunId);
 
       if (returnedSyncRunId) {
-        const startedAt = new Date().toISOString();
-        saveLocalStorageSync(returnedSyncRunId, activeSession.id, startedAt);
-        showToast('Sincronización iniciada. Monitoreando progreso...', 'success');
-        startPollingById(returnedSyncRunId);
+        showToastMsg('Sincronización iniciada. Monitoreando...', 'success');
+        syncRunIdRef.current = returnedSyncRunId;
       } else {
-        console.warn('[TFI] Webhook no devolvió sync_run_id válido. Iniciando fallback por sesión (15s max).');
-        fallbackUntilRef.current = Date.now() + FALLBACK_MAX_MS;
-        fallbackSessionIdRef.current = activeSession.id;
-        showToast('Sincronización iniciada (modo compatibilidad). Monitoreando...', 'success');
-        startPollingBySession(activeSession.id);
+        showToastMsg('Sincronización iniciada pero sin sync_run_id. Esperando...', 'warning');
+      }
 
-        fallbackSafetyTimerRef.current = setTimeout(() => {
-          if (!currentSyncRunIdRef.current) {
-            clearTimers();
-            setSyncState('error');
-            showToast(
-              'N8N respondió, pero no devolvió un sync_run_id válido ni se encontró una sincronización activa.',
-              'error'
-            );
-            setTimeout(() => setSyncState('idle'), 4000);
-            fallbackUntilRef.current = 0;
-            fallbackSessionIdRef.current = null;
-          }
-        }, FALLBACK_MAX_MS);
+      // Start polling — this is shared with WarehouseSyncButtons via registry
+      startPolling();
+    } catch (err) {
+      const { userMessage } = formatWebhookError(err);
+      setLocalStarting(false);
+      syncRunIdRef.current = null;
+      showToastMsg(userMessage, 'error');
+    }
+  }, [activeSession, effectiveStatus, selectedSituation, showToastMsg, startPolling]);
+
+  // ── Stop / Cancel ──────────────────────────────────────────────────────────
+  const handleStop = useCallback(async () => {
+    if (!activeSession) return;
+
+    stopPolling();
+    setLocalStarting(false);
+
+    const syncRunId = syncRunIdRef.current;
+
+    if (!syncRunId) {
+      await releaseSyncLock(activeSession.id, 'Detención manual desde TfiRefreshControl').catch(() => {});
+      showToastMsg('Sincronización detenida', 'warning');
+      syncRunIdRef.current = null;
+      return;
+    }
+
+    try {
+      const result = await cancelSyncRun(syncRunId, activeSession.id);
+      if (result.cancelled) {
+        showToastMsg('Sincronización cancelada', 'warning');
+      } else {
+        showToastMsg(`No se pudo cancelar: ${result.message}`, 'error');
       }
     } catch (err) {
-      const { userMessage, logDetails } = formatWebhookError(err);
-      console.error('[TFI] Error en handleRefresh:', logDetails);
-      setSyncState('error');
-      showToast(userMessage, 'error');
-      setTimeout(() => setSyncState('idle'), 4000);
-    } finally {
-      isStartingRef.current = false;
+      console.error('[TfiRefreshControl] cancel error:', err);
+      await releaseSyncLock(activeSession.id, 'Detención manual fallback').catch(() => {});
+      showToastMsg('Sincronización detenida (fallback)', 'warning');
     }
-  };
 
-  const disabled = isStartingRef.current || syncState === 'starting' || syncState === 'syncing' || !activeSession;
+    syncRunIdRef.current = null;
+  }, [activeSession, showToastMsg, stopPolling]);
+
+  // ── Force unlock ───────────────────────────────────────────────────────────
+  const handleForceUnlock = useCallback(async () => {
+    if (!activeSession) return;
+    setForceLoading(true);
+    try {
+      const result = await forceReleaseSyncLock(activeSession.id, 'Force unlock via TfiRefreshControl');
+      if (result.released) {
+        stopPolling();
+        setLocalStarting(false);
+        syncRunIdRef.current = null;
+        showToastMsg('Sincronización liberada. ' + result.message, 'warning');
+      } else {
+        showToastMsg('No se pudo liberar: ' + result.message, 'error');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido';
+      showToastMsg('Error al liberar: ' + msg, 'error');
+    } finally {
+      setForceLoading(false);
+      setShowForceModal(false);
+    }
+  }, [activeSession, showToastMsg, stopPolling]);
+
+  // ── Cleanup all zombies ────────────────────────────────────────────────────
+  const handleCleanupAll = useCallback(async () => {
+    setForceLoading(true);
+    try {
+      const cleanup = await cleanupZombieSyncs(60, 5);
+      const total = cleanup.cleaned_locks + cleanup.cleaned_syncs + cleanup.cleaned_branches;
+      if (total > 0) {
+        showToastMsg(`Limpieza: ${cleanup.cleaned_locks} locks, ${cleanup.cleaned_syncs} syncs, ${cleanup.cleaned_branches} ramas`, 'warning');
+        stopPolling();
+        setLocalStarting(false);
+        triggerRefresh();
+      } else {
+        showToastMsg('No se encontraron sincronizaciones colgadas', 'success');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido';
+      showToastMsg(`Error en limpieza: ${msg}`, 'error');
+    } finally {
+      setForceLoading(false);
+    }
+  }, [showToastMsg, stopPolling, triggerRefresh]);
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
+  const isActive = isActiveState(effectiveStatus);
+  const needsUnlock = isProblemState(effectiveStatus);
+  const canCancel = isCancellableState(effectiveStatus);
+  const colors = statusColor(effectiveStatus);
+
+  // Backend data for debug panel
+  const lastPollData: SyncStatusResult | null = rawStatus ?? null;
+  const minutesSinceStart = rawStatus?.minutes_since_start ?? 0;
+  const syncRows = rawStatus?.sync_run_total_rows ?? null;
+  const syncBranches = { completed: rawStatus?.branches_completed ?? 0, total: rawStatus?.branch_count ?? 0 };
+
+  // Visual warnings — NO status change
+  const missingHeartbeat = hasMissingHeartbeat(rawStatus);
+  const staleHeartbeat = hasStaleHeartbeat(rawStatus);
+  const showHeartbeatWarning = (missingHeartbeat || staleHeartbeat) && isActive;
 
   const statusIndicator = () => {
-    if (syncState === 'starting' || syncState === 'syncing') {
-      if (slowSyncWarning) {
-        return (
-          <span className="flex items-center gap-1.5 text-xs font-medium text-amber-600">
-            <i className="ri-time-line text-sm"></i>
-            La sincronización está tardando más de lo normal
-          </span>
-        );
-      }
+    if (isActive) {
       return (
-        <span className="flex items-center gap-1.5 text-xs font-medium text-sky-600">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-sky-600 flex-wrap">
           <i className="ri-loader-4-line animate-spin text-sm"></i>
-          Sincronizando...
+          {effectiveStatus === 'starting' ? 'Iniciando...' : effectiveStatus === 'finishing' ? 'Finalizando...' : `Sincronizando... ${formatElapsed(minutesSinceStart)}`}
+          {syncRows !== null && ` · ${syncRows.toLocaleString()} filas`}
+          {syncBranches.total > 0 && ` · ${syncBranches.completed}/${syncBranches.total} ramas`}
+          {showHeartbeatWarning && (
+            <span className="text-amber-600 flex items-center gap-1">
+              <i className="ri-alert-line"></i>
+              {missingHeartbeat ? 'Sin heartbeat' : `N8N inactivo ${Math.floor(rawStatus?.minutes_since_last_n8n_step ?? 0)}m`}
+            </span>
+          )}
         </span>
       );
     }
-    if (syncState === 'success') {
+    if (effectiveStatus === 'completed') {
       return (
         <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
           <i className="ri-checkbox-circle-line text-sm"></i>
@@ -507,11 +328,27 @@ export default function TfiRefreshControl() {
         </span>
       );
     }
-    if (syncState === 'error') {
+    if (effectiveStatus === 'failed') {
       return (
         <span className="flex items-center gap-1.5 text-xs font-medium text-red-600">
           <i className="ri-error-warning-line text-sm"></i>
-          Error al sincronizar
+          {statusLabel(effectiveStatus)}
+        </span>
+      );
+    }
+    if (effectiveStatus === 'cancelled') {
+      return (
+        <span className="flex items-center gap-1.5 text-xs font-medium text-gray-600">
+          <i className="ri-close-circle-line text-sm"></i>
+          Cancelado
+        </span>
+      );
+    }
+    if (needsUnlock) {
+      return (
+        <span className="flex items-center gap-1.5 text-xs font-medium text-orange-600">
+          <i className="ri-alarm-warning-line text-sm"></i>
+          {rawStatus?.computed_message || `Sync ${effectiveStatus} — requiere atención`}
         </span>
       );
     }
@@ -525,9 +362,8 @@ export default function TfiRefreshControl() {
         <i className="ri-filter-3-line text-gray-400 text-sm shrink-0"></i>
         <select
           value={selectedSituation}
-          onChange={(e) => handleSituationChange(e.target.value)}
+          onChange={(e) => setSelectedSituation(e.target.value)}
           className="border border-gray-200 rounded-lg text-sm px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 cursor-pointer"
-          title="Situación"
         >
           {availableSituations.map((s) => (
             <option key={s} value={s}>{s}</option>
@@ -535,34 +371,173 @@ export default function TfiRefreshControl() {
         </select>
       </div>
 
-      {/* Indicador de estado */}
-      <div className="hidden lg:flex flex-col min-w-[140px]">
+      {/* Debug toggle */}
+      <button
+        onClick={() => setShowDebugPanel((p) => !p)}
+        title="Debug sync"
+        className="flex items-center justify-center w-7 h-7 rounded-lg border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer"
+      >
+        <i className={`ri-${showDebugPanel ? 'eye-off' : 'eye'}-line text-xs`}></i>
+      </button>
+
+      {/* Sync button + controls */}
+      <div className="flex items-center gap-2">
+        {canCancel && (
+          <button
+            onClick={handleStop}
+            title="Cancelar sincronización"
+            className="flex items-center justify-center w-8 h-8 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors cursor-pointer"
+          >
+            <i className="ri-stop-fill text-sm"></i>
+          </button>
+        )}
+
+        {needsUnlock && (
+          <button
+            onClick={() => setShowForceModal(true)}
+            title="Liberar sincronización (admin)"
+            className="flex items-center justify-center w-8 h-8 rounded-lg border border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 transition-colors cursor-pointer"
+          >
+            <i className="ri-lock-unlock-line text-sm"></i>
+          </button>
+        )}
+
+        <button
+          onClick={handleRefresh}
+          disabled={isActive || !activeSession}
+          className={`flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+            isActive || !activeSession
+              ? 'border-gray-200 text-gray-400 bg-white cursor-not-allowed'
+              : 'border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+          }`}
+        >
+          {isActive ? (
+            <i className="ri-loader-4-line animate-spin text-sm"></i>
+          ) : needsUnlock ? (
+            <i className="ri-restart-line text-sm"></i>
+          ) : (
+            <i className="ri-refresh-line text-sm"></i>
+          )}
+          {needsUnlock ? 'Reintentar' : isActive ? 'Sincronizando...' : 'Sincronizar'}
+        </button>
+      </div>
+
+      {/* Status indicator */}
+      <div className="hidden lg:flex flex-col min-w-[180px]">
         {statusIndicator()}
-        {externalRunningNotice && (
-          <span className="flex items-center gap-1.5 text-xs font-medium text-amber-600 mt-0.5">
-            <i className="ri-information-line text-sm"></i>
-            {externalRunningNotice}
-          </span>
+
+        {/* Debug panel — REAL backend data only */}
+        {showDebugPanel && lastPollData && (
+          <div className={`mt-2 rounded-lg border p-2.5 space-y-1 text-[10px] font-mono ${colors.bg} ${colors.border}`}>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Backend status:</span>
+              <span className={`font-semibold ${colors.text}`}>{lastPollData.computed_status}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Mensaje:</span>
+              <span className="text-right max-w-[120px] truncate">{lastPollData.computed_message}</span>
+            </div>
+            {lastPollData.sync_run_id && (
+              <div className="flex items-center justify-between">
+                <span className="opacity-60">SyncRun ID:</span>
+                <span>{lastPollData.sync_run_id.slice(0, 8)}...</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Lock activo:</span>
+              <span className={lastPollData.lock_is_running ? 'text-emerald-600' : 'text-gray-400'}>
+                {lastPollData.lock_is_running ? 'Sí' : 'No'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Filas:</span>
+              <span>{lastPollData.sync_run_total_rows ?? '—'}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Ramas:</span>
+              <span>{lastPollData.branches_completed}/{lastPollData.branch_count}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Tiempo:</span>
+              <span>{lastPollData.minutes_since_start.toFixed(1)}min</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">N8N idle:</span>
+              <span>{lastPollData.minutes_since_last_n8n_step.toFixed(1)}min</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="opacity-60">Últ. update:</span>
+              <span>{lastPollData.minutes_since_last_update.toFixed(1)}min</span>
+            </div>
+            {lastPollData.sync_run_error_message && lastPollData.sync_run_error_message !== lastPollData.computed_message && (
+              <div className="pt-1 border-t border-black/5">
+                <span className="opacity-60">Error:</span>
+                <span className="text-red-500 block">{lastPollData.sync_run_error_message.slice(0, 100)}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {showDebugPanel && !lastPollData && effectiveStatus === 'idle' && (
+          <div className="mt-2 rounded-lg border p-2.5 text-[10px] font-mono bg-gray-50 border-gray-200 text-gray-400">
+            No hay sync activo. Backend limpio.
+          </div>
         )}
       </div>
 
       {/* Toast */}
       {toast && (
-        <div
-          className={`absolute right-0 top-10 z-50 flex items-center gap-2 text-xs font-medium px-4 py-2.5 rounded-lg shadow-lg border whitespace-nowrap ${
-            toast.type === 'success'
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              : 'bg-red-50 text-red-700 border-red-200'
-          }`}
-        >
-          <i
-            className={
-              toast.type === 'success'
-                ? 'ri-checkbox-circle-line text-sm'
-                : 'ri-error-warning-line text-sm'
-            }
-          ></i>
+        <div className={`absolute right-0 top-10 z-50 flex items-center gap-2 text-xs font-medium px-4 py-2.5 rounded-lg border whitespace-nowrap ${
+          toast.type === 'success'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : toast.type === 'error'
+            ? 'bg-red-50 text-red-700 border-red-200'
+            : 'bg-amber-50 text-amber-700 border-amber-200'
+        }`}>
+          <i className={toast.type === 'success' ? 'ri-checkbox-circle-line text-sm' : toast.type === 'error' ? 'ri-error-warning-line text-sm' : 'ri-alert-line text-sm'}></i>
           {toast.message}
+        </div>
+      )}
+
+      {/* Force Unlock Modal */}
+      {showForceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 flex items-center justify-center bg-red-50 rounded-lg">
+                <i className="ri-alarm-warning-line text-red-600 text-lg"></i>
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Liberar sincronización</h3>
+                <p className="text-xs text-gray-500">{activeSession?.name}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Esto forzará la liberación del bloqueo. Úsalo solo cuando el sync esté atascado.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowForceModal(false)}
+                className="flex-1 text-sm font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleForceUnlock}
+                disabled={forceLoading}
+                className="flex-1 text-sm font-medium px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {forceLoading ? (
+                  <span className="flex items-center justify-center gap-1.5">
+                    <i className="ri-loader-4-line animate-spin text-sm"></i>
+                    Liberando...
+                  </span>
+                ) : (
+                  'Liberar'
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

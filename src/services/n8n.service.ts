@@ -20,14 +20,28 @@ function isValidUUID(value: string): boolean {
   return uuidRegex.test(value);
 }
 
-export async function triggerTfiRefresh(payload: N8nRefreshPayload, webhookUrl?: string): Promise<string> {
+export async function triggerTfiRefresh(payload: N8nRefreshPayload, webhookUrl?: string, expectedSyncRunId?: string): Promise<string> {
   const url = webhookUrl || WEBHOOK_URL;
   if (!url || url.trim() === '') {
     throw new WebhookError('URL del webhook no está configurada. Agregala en el archivo .env o pasala como parámetro.');
   }
 
+  // Defensa crítica: validar que supabase está inicializado
+  if (!supabase) {
+    throw new WebhookError('Supabase client no está inicializado. Verificá la configuración de .env.');
+  }
+  if (!supabase.functions) {
+    throw new WebhookError('Supabase functions no está disponible. Verificá la conexión a Supabase.');
+  }
+  if (typeof supabase.functions.invoke !== 'function') {
+    throw new WebhookError('Supabase functions.invoke no está disponible. Verificá la conexión a Supabase.');
+  }
+
   console.log('[N8N Webhook] URL:', url);
   console.log('[N8N Webhook] Payload:', JSON.stringify(payload, null, 2));
+  if (expectedSyncRunId) {
+    console.log('[N8N Webhook] Expected sync_run_id:', expectedSyncRunId);
+  }
 
   try {
     // Llamar al webhook a través del proxy de Edge Function para evitar CORS
@@ -40,6 +54,16 @@ export async function triggerTfiRefresh(payload: N8nRefreshPayload, webhookUrl?:
         `Error en proxy: ${error.message}`,
         error.status,
         JSON.stringify(error)
+      );
+    }
+
+    // Defensa: si data es undefined o null
+    if (!data || typeof data !== 'object') {
+      console.error('[N8N Webhook] Response data inválido:', data);
+      throw new WebhookError(
+        'Respuesta inválida del proxy de webhook: data es undefined o no es objeto',
+        undefined,
+        String(data)
       );
     }
 
@@ -95,6 +119,20 @@ export async function triggerTfiRefresh(payload: N8nRefreshPayload, webhookUrl?:
         return '';
       }
 
+      // CRITICAL: Sync run mismatch detection
+      // If frontend sent an expected sync_run_id, N8N MUST return the same one
+      if (expectedSyncRunId && syncRunId !== expectedSyncRunId) {
+        console.error('[N8N Webhook] SYNC RUN MISMATCH!');
+        console.error('[N8N Webhook] Expected:', expectedSyncRunId);
+        console.error('[N8N Webhook] Received:', syncRunId);
+        console.error('[N8N Webhook] Response completo:', bodyText);
+        throw new WebhookError(
+          'Sync run mismatch: N8N devolvió un sync_run_id diferente al enviado. El workflow no está usando el sync_run_id correcto.',
+          status,
+          bodyText
+        );
+      }
+
       console.log('[N8N Webhook] sync_run_id recibido:', syncRunId);
       return syncRunId;
     }
@@ -107,7 +145,8 @@ export async function triggerTfiRefresh(payload: N8nRefreshPayload, webhookUrl?:
       throw err;
     }
 
-    const fetchError = err as Error;
+    // Defensa: si err no es un Error, convertirlo
+    const fetchError = err instanceof Error ? err : new Error(String(err));
     console.error('[N8N Webhook] Error de red/CORS/fetch:', fetchError.message);
     console.error('[N8N Webhook] Error completo:', fetchError);
 

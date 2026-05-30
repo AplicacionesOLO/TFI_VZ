@@ -11,7 +11,10 @@ export type ComparisonV2Status =
   | 'ALL_DIFFERENT'
   | 'PENDING_TAKE_A'
   | 'PENDING_TAKE_B'
-  | 'NO_DATA';
+  | 'NO_DATA'
+  | 'SINGLE_TAKE';
+
+export type ComparisonMode = 'compare' | 'single_take';
 
 // ─── Una toma disponible para seleccionar ──────────────────────────────────
 export interface AvailableTake {
@@ -33,7 +36,7 @@ export interface ComparisonV2Line {
   take_a_name: string;
   take_a_qty: number | null;
   take_a_user: string | null;
-  take_b_name: string;
+  take_b_name: string | null;
   take_b_qty: number | null;
   take_b_user: string | null;
   recount_qty: number | null;
@@ -42,19 +45,36 @@ export interface ComparisonV2Line {
   comparison_status: ComparisonV2Status;
   final_difference: number;
   total_count: number;
+  situation?: string | null;
+  form_status?: string | null;
+  situation_b?: string | null;
+  form_status_b?: string | null;
+  situation_recount?: string | null;
+  form_status_recount?: string | null;
+  registered_at?: string | null;
 }
 
 // ─── Filtros para la tabla de comparación ──────────────────────────────────
 export interface ComparisonV2Filters {
   session_id: string;
   take_a_name: string;
-  take_b_name: string;
+  take_b_name: string | null;
   article_search?: string;
   status_filter?: string;
   page?: number;
   page_size?: number;
   date_from?: string;
   date_to?: string;
+}
+
+// ─── Filtros para modo single take ─────────────────────────────────────────
+export interface SingleTakeFilters {
+  session_id: string;
+  take_name: string;
+  article_search?: string;
+  status_filter?: string;
+  page?: number;
+  page_size?: number;
 }
 
 // ─── Resumen de estados para los pills ─────────────────────────────────────
@@ -66,4 +86,5 @@ export interface ComparisonV2Summary {
   recount_match_b: number;
   all_different: number;
   different: number;
+  single_take: number;
 }

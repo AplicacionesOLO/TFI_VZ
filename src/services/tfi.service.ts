@@ -7,8 +7,6 @@ import type {
   TfiGlobalPrecision,
   ComparisonFilters,
   DashboardStats,
-  TfiSyncRun,
-  TfiSyncLock,
   RankingsBundle,
   UserRankingCounts,
   UserRankingRecounts,
@@ -573,130 +571,10 @@ export async function getAvailableSituations(sessionId: string): Promise<string[
   return ['TODOS', ...rest];
 }
 
-export async function getSyncRunById(syncRunId: string): Promise<TfiSyncRun | null> {
-  console.log('[Supabase] getSyncRunById — syncRunId:', syncRunId);
+// ─── Sync functions removed from here — use sync-lifecycle.service.ts instead ──
+// (acquireSyncLock, releaseSyncLock, getSyncLocks, getSyncLock, getSyncRunById,
+//  getRunningSyncForSession, getLatestSyncRun were duplicates)
 
-  const { data, error } = await supabase
-    .from('tfi_sync_runs')
-    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
-    .eq('id', syncRunId)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[Supabase] getSyncRunById error:', error.message, error.details, error.hint);
-    throw error;
-  }
-
-  console.log('[Supabase] getSyncRunById resultado:', data);
-  return data as TfiSyncRun | null;
-}
-
-// Busca específicamente un sync en estado 'running' para una sesión.
-// Devuelve null si no hay ninguno activo.
-export async function getRunningSyncForSession(sessionId: string): Promise<TfiSyncRun | null> {
-  console.log('[Supabase] getRunningSyncForSession — sessionId:', sessionId);
-
-  const { data, error } = await supabase
-    .from('tfi_sync_runs')
-    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
-    .eq('session_id', sessionId)
-    .eq('status', 'running')
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[Supabase] getRunningSyncForSession error:', error.message, error.details, error.hint);
-    throw error;
-  }
-
-  console.log('[Supabase] getRunningSyncForSession resultado:', data);
-  return data as TfiSyncRun | null;
-}
-
-export async function getLatestSyncRun(sessionId: string): Promise<TfiSyncRun | null> {
-  console.log('[Supabase] getLatestSyncRun — sessionId:', sessionId);
-
-  const { data, error } = await supabase
-    .from('tfi_sync_runs')
-    .select('id,session_id,situation,status,started_at,finished_at,total_rows,error_message')
-    .eq('session_id', sessionId)
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[Supabase] getLatestSyncRun error:', error.message, error.details, error.hint);
-    throw error;
-  }
-
-  console.log('[Supabase] getLatestSyncRun resultado:', data);
-  return data as TfiSyncRun | null;
-}
-
-// ─── Sync Lock Functions ────────────────────────────────────────────────────
-
-export async function acquireSyncLock(sessionId: string, syncRunId: string): Promise<boolean> {
-  console.log('[SyncLock] acquireSyncLock — sessionId:', sessionId, 'syncRunId:', syncRunId);
-
-  const { data, error } = await supabase.rpc('acquire_tfi_sync_lock', {
-    p_session_id: sessionId,
-    p_sync_run_id: syncRunId,
-  });
-
-  if (error) {
-    console.error('[SyncLock] acquireSyncLock error:', error.message, error.details, error.hint);
-    throw error;
-  }
-
-  console.log('[SyncLock] acquireSyncLock resultado:', data);
-  return (data as boolean) ?? false;
-}
-
-export async function releaseSyncLock(sessionId: string, errorMsg?: string): Promise<void> {
-  console.log('[SyncLock] releaseSyncLock — sessionId:', sessionId, 'error:', errorMsg ?? 'none');
-
-  const { error } = await supabase.rpc('release_tfi_sync_lock', {
-    p_session_id: sessionId,
-    p_error: errorMsg ?? null,
-  });
-
-  if (error) {
-    console.error('[SyncLock] releaseSyncLock error:', error.message, error.details, error.hint);
-    throw error;
-  }
-
-  console.log('[SyncLock] releaseSyncLock — liberado');
-}
-
-export async function getSyncLocks(): Promise<TfiSyncLock[]> {
-  const { data, error } = await supabase
-    .from('tfi_sync_locks')
-    .select('*');
-
-  if (error) {
-    console.error('[SyncLock] getSyncLocks error:', error.message);
-    throw error;
-  }
-
-  console.log('[SyncLock] getSyncLocks:', data?.length ?? 0, 'locks encontrados');
-  return (data ?? []) as TfiSyncLock[];
-}
-
-export async function getSyncLock(sessionId: string): Promise<TfiSyncLock | null> {
-  console.log('[SyncLock] getSyncLock — sessionId:', sessionId);
-
-  const { data, error } = await supabase
-    .from('tfi_sync_locks')
-    .select('*')
-    .eq('session_id', sessionId)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[SyncLock] getSyncLock error:', error.message);
-    throw error;
-  }
-
-  console.log('[SyncLock] getSyncLock resultado:', data);
-  return data as TfiSyncLock | null;
-}
+// NOTE: All sync lifecycle functions are now centralized in:
+//   src/services/sync-lifecycle.service.ts
+// Import from there to avoid duplication.

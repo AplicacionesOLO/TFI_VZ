@@ -41,6 +41,10 @@ const statusConfig: Record<string, { label: string; className: string }> = {
     label: 'SIN DATOS',
     className: 'bg-gray-50 text-gray-400 border border-gray-200',
   },
+  SINGLE_TAKE: {
+    label: 'SOLO TOMA A',
+    className: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  },
 };
 
 export default function StatusBadgeV2({ status }: StatusBadgeV2Props) {
