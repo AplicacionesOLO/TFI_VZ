@@ -40,7 +40,7 @@ function notify(entry: PollingEntry) {
   }
 }
 
-function stopEntry(sessionId: string) {
+function stopEntry(sessionId: string, clearStatus: boolean = false) {
   const entry = registry.get(sessionId);
   if (!entry) return;
   if (entry.intervalId) {
@@ -49,6 +49,10 @@ function stopEntry(sessionId: string) {
   }
   entry.isPolling = false;
   entry.pollAttempts = 0;
+  if (clearStatus) {
+    entry.status = null;
+    notify(entry);
+  }
 }
 
 function startEntry(sessionId: string) {
@@ -153,7 +157,7 @@ export function useSyncPolling(sessionId: string | null | undefined): UseSyncPol
 
   const stopPolling = useCallback(() => {
     if (!sessionId) return;
-    stopEntry(sessionId);
+    stopEntry(sessionId, true); // clear status + notify
     setIsPolling(false);
   }, [sessionId]);
 

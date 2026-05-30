@@ -423,36 +423,33 @@ function WarehouseCard({
   }, [effectiveStatus, warehouse, selectedSituation, showToast, acquireSyncLock, startPolling, onSyncStart]);
 
   const handleStop = useCallback(async () => {
-    const syncRunId = syncRunIdRef.current ?? state.syncRunId;
-
-    if (!isCancellableState(effectiveStatus)) return;
+    // Use backend sync_run_id as primary source, fallback to local ref
+    const syncRunId = state.syncRunId ?? syncRunIdRef.current;
 
     stopPolling();
     setLocalStarting(false);
     localStartingRef.current = false;
 
-    if (!syncRunId) {
-      await releaseSyncLock(warehouse.sessionId, 'Detención forzada por el usuario').catch(() => {});
-      onSyncStop();
-      showToast(`Sincronización de ${warehouse.name} detenida`, 'warning');
-      return;
-    }
-
-    try {
-      const result = await cancelSyncRun(syncRunId, warehouse.sessionId);
-      if (result.cancelled) {
-        showToast(`Sincronización de ${warehouse.name} cancelada`, 'warning');
-      } else {
-        showToast(`No se pudo cancelar: ${result.message}`, 'error');
+    if (syncRunId) {
+      try {
+        const result = await cancelSyncRun(syncRunId, warehouse.sessionId);
+        if (result.cancelled) {
+          showToast(`Sincronización de ${warehouse.name} cancelada`, 'warning');
+        } else {
+          showToast(`No se pudo cancelar: ${result.message}`, 'error');
+        }
+      } catch (err) {
+        console.error(`[Stop] ${warehouse.name} cancel error:`, err);
+        await releaseSyncLock(warehouse.sessionId, 'Detención forzada fallback').catch(() => {});
+        showToast(`Sincronización de ${warehouse.name} detenida (fallback)`, 'warning');
       }
-    } catch (err) {
-      console.error(`[Stop] ${warehouse.name} cancel error:`, err);
-      await releaseSyncLock(warehouse.sessionId, 'Detención forzada fallback').catch(() => {});
-      showToast(`Sincronización de ${warehouse.name} detenida (fallback)`, 'warning');
+    } else {
+      await releaseSyncLock(warehouse.sessionId, 'Detención forzada por el usuario').catch(() => {});
+      showToast(`Sincronización de ${warehouse.name} detenida`, 'warning');
     }
 
     onSyncStop();
-  }, [effectiveStatus, state.syncRunId, warehouse, showToast, stopPolling, onSyncStop]);
+  }, [state.syncRunId, warehouse, showToast, stopPolling, onSyncStop]);
 
   const isThisActive = isActiveState(effectiveStatus);
   const needsUnlock = isProblemState(effectiveStatus);
