@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import AppLayout from '@/components/feature/AppLayout';
 import WarehouseSyncButtons from '@/components/feature/WarehouseSyncButtons';
 import KpiCard from './components/KpiCard';
+import DashboardTakeSelector from './components/DashboardTakeSelector';
 import { Link } from 'react-router-dom';
 import { useSession } from '@/context/SessionContext';
 import {
@@ -10,7 +11,9 @@ import {
   getAllUserPrecisionForExport,
 } from '@/services/tfi.service';
 import { getDashboardV2Stats, getDashboardV2Diffs } from '@/services/dashboard-v2.service';
+import { getAvailableTakesV2 } from '@/services/comparison-v2.service';
 import type { DashboardStats, DashboardV2Stats, DashboardV2Diff } from '@/types/tfi.types';
+import type { AvailableTake } from '@/types/comparison-v2.types';
 import { LoadingKpis } from '@/components/base/LoadingState';
 import ErrorState from '@/components/base/ErrorState';
 import StatusBadge from '@/pages/comparison/components/StatusBadge';
@@ -27,6 +30,12 @@ export default function HomePage() {
   const [exportLoading, setExportLoading] = useState(false);
   const [exportToast, setExportToast] = useState<string | null>(null);
 
+  // Take filter state
+  const [availableTakes, setAvailableTakes] = useState<AvailableTake[]>([]);
+  const [selectedTakes, setSelectedTakes] = useState<string[]>([]);
+  const [takesLoading, setTakesLoading] = useState(false);
+  const [takesError, setTakesError] = useState<string | null>(null);
+
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === selectedSession) ?? null,
     [sessions, selectedSession]
@@ -42,6 +51,25 @@ export default function HomePage() {
     return activeSession.location ? `${activeSession.name} — ${activeSession.location}` : activeSession.name;
   }, [activeSession]);
 
+  // Load available takes when session changes
+  useEffect(() => {
+    if (!selectedSession || !isV2) {
+      setAvailableTakes([]);
+      setSelectedTakes([]);
+      return;
+    }
+    setTakesLoading(true);
+    setTakesError(null);
+    setSelectedTakes([]);
+
+    getAvailableTakesV2(selectedSession)
+      .then((takes) => {
+        setAvailableTakes(takes);
+      })
+      .catch((err) => setTakesError(err?.message ?? 'Error al cargar tomas'))
+      .finally(() => setTakesLoading(false));
+  }, [selectedSession, isV2]);
+
   const fetchData = useCallback(() => {
     if (!selectedSession) {
       setLoading(false);
@@ -50,10 +78,12 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
 
+    const takeFilter = selectedTakes.length > 0 ? selectedTakes : undefined;
+
     if (isV2) {
       Promise.all([
-        getDashboardV2Stats(selectedSession),
-        getDashboardV2Diffs(selectedSession, 10),
+        getDashboardV2Stats(selectedSession, takeFilter),
+        getDashboardV2Diffs(selectedSession, 10, takeFilter),
       ])
         .then(([stats, diffs]) => {
           setStatsV2(stats);
@@ -67,7 +97,7 @@ export default function HomePage() {
         .catch((err) => setError(err?.message ?? 'Error al cargar el dashboard'))
         .finally(() => setLoading(false));
     }
-  }, [selectedSession, isV2, refreshTrigger]);
+  }, [selectedSession, isV2, refreshTrigger, selectedTakes]);
 
   useEffect(() => {
     fetchData();
@@ -203,6 +233,51 @@ export default function HomePage() {
           </div>
           <WarehouseSyncButtons />
         </div>
+
+        {/* Take filter for V2 */}
+        {isV2 && (
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-6 h-6 flex items-center justify-center">
+                <i className="ri-filter-3-line text-gray-400"></i>
+              </div>
+              <h2 className="text-sm font-semibold text-gray-700">Filtrar por Tomas</h2>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100 p-4">
+              <div className="flex flex-wrap items-start gap-4">
+                <div className="flex-1 min-w-[280px] max-w-md">
+                  <DashboardTakeSelector
+                    takes={availableTakes}
+                    selectedTakes={selectedTakes}
+                    onChange={setSelectedTakes}
+                    loading={takesLoading}
+                    disabled={!selectedSession}
+                  />
+                </div>
+                {takesError && (
+                  <div className="flex items-center gap-2 text-sm text-red-600">
+                    <i className="ri-error-warning-line"></i>
+                    {takesError}
+                    <button
+                      onClick={() => {
+                        if (!selectedSession) return;
+                        setTakesLoading(true);
+                        setTakesError(null);
+                        getAvailableTakesV2(selectedSession)
+                          .then(setAvailableTakes)
+                          .catch((err) => setTakesError(err?.message ?? 'Error'))
+                          .finally(() => setTakesLoading(false));
+                      }}
+                      className="text-xs text-emerald-600 hover:text-emerald-700 underline cursor-pointer"
+                    >
+                      Reintentar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Error */}
         {error && (

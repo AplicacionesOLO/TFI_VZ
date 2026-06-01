@@ -5,6 +5,7 @@ import LoadingState from '@/components/base/LoadingState';
 import ErrorState from '@/components/base/ErrorState';
 import EmptyState from '@/components/base/EmptyState';
 import ExportButtons from '@/components/feature/ExportButtons';
+import MultiSelectDropdown from '@/components/base/MultiSelectDropdown';
 import { useSession } from '@/context/SessionContext';
 import { getRankingData } from '@/services/tfi.service';
 import { getRankingV2 } from '@/services/ranking-v2.service';
@@ -88,7 +89,7 @@ export default function RankingPage() {
   }, [selectedSession, sessions]);
 
   // ─── Estado común ──────────────────────────────────────────────────────
-  const [userFilter, setUserFilter] = useState('');
+  const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
@@ -146,10 +147,9 @@ export default function RankingPage() {
         session_id: selectedSession,
         take_names: selectedTakeNames.length > 0 ? selectedTakeNames : undefined,
         take_type: takeType,
-        user_search: userFilter.trim() || undefined,
       });
       setV2Ranking(data);
-      
+
       // Cargar tomas disponibles si no están cargadas
       if (availableTakes.length === 0) {
         const takes = await getAvailableTakesV2(selectedSession);
@@ -160,7 +160,7 @@ export default function RankingPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedSession, refreshTrigger, v2Tab, selectedTakeNames, userFilter]);
+  }, [selectedSession, refreshTrigger, v2Tab, selectedTakeNames]);
 
   // ─── Efecto principal: elegir entre V1 y V2 ───────────────────────────
   useEffect(() => {
@@ -171,9 +171,9 @@ export default function RankingPage() {
     }
   }, [isV2, fetchV1, fetchV2]);
 
-  // ─── Resetear filtro de usuario al cambiar sesión ─────────────────────
+  // ─── Resetear filtro de usuarios al cambiar sesión ─────────────────────
   useEffect(() => {
-    setUserFilter('');
+    setSelectedUsers([]);
     setSelectedTakeNames([]);
     setAvailableTakes([]);
   }, [selectedSession]);
@@ -184,6 +184,26 @@ export default function RankingPage() {
     if (!s) return selectedSession;
     return s.location ? `${s.name} — ${s.location}` : s.name;
   }, [selectedSession, sessions]);
+
+  // ─── V1: usuarios disponibles ─────────────────────────────────────────
+  const v1UserOptions = useMemo(() => {
+    if (!rankings) return [];
+    const allUsers = new Map<string, string>();
+    for (const u of rankings.counts) {
+      allUsers.set(u.user_name, u.display_name);
+    }
+    for (const u of rankings.recounts) {
+      allUsers.set(u.user_name, u.display_name);
+    }
+    for (const u of rankings.global) {
+      allUsers.set(u.user_name, u.display_name);
+    }
+    return Array.from(allUsers.entries()).map(([user_name, display_name]) => ({
+      value: user_name,
+      label: display_name,
+      subtitle: user_name,
+    }));
+  }, [rankings]);
 
   // ─── V1: listas filtradas ──────────────────────────────────────────────
   const currentList = useMemo(() => {
@@ -200,14 +220,9 @@ export default function RankingPage() {
         list = rankings.global;
         break;
     }
-    if (!userFilter.trim()) return list;
-    const q = userFilter.trim().toLowerCase();
-    return list.filter(
-      (u) =>
-        u.display_name.toLowerCase().includes(q) ||
-        u.user_name.toLowerCase().includes(q)
-    );
-  }, [rankings, rankingType, userFilter]);
+    if (selectedUsers.length === 0) return list;
+    return list.filter((u) => selectedUsers.includes(u.user_name));
+  }, [rankings, rankingType, selectedUsers]);
 
   const enoughDataList = useMemo(
     () => currentList.filter((u) => u.hasEnoughData),
@@ -220,10 +235,30 @@ export default function RankingPage() {
     return sum / enoughDataList.length;
   }, [enoughDataList]);
 
-  // ─── V2: métricas ──────────────────────────────────────────────────────
+  // ─── V2: usuarios disponibles ─────────────────────────────────────────
+  const v2UserOptions = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const u of v2Ranking) {
+      const current = seen.get(u.user_id) ?? 0;
+      seen.set(u.user_id, current + u.total_conteos);
+    }
+    return Array.from(seen.entries()).map(([user_id, count]) => ({
+      value: user_id,
+      label: user_id,
+      subtitle: `${count.toLocaleString()} conteos`,
+    }));
+  }, [v2Ranking]);
+
+  // ─── V2: ranking filtrado por usuarios seleccionados ──────────────────
+  const v2FilteredRanking = useMemo(() => {
+    if (selectedUsers.length === 0) return v2Ranking;
+    return v2Ranking.filter((u) => selectedUsers.includes(u.user_id));
+  }, [v2Ranking, selectedUsers]);
+
+  // ─── V2: métricas sobre filtrado ──────────────────────────────────────
   const v2EnoughData = useMemo(
-    () => v2Ranking.filter((u) => u.total_conteos >= 20),
-    [v2Ranking]
+    () => v2FilteredRanking.filter((u) => u.total_conteos >= 20),
+    [v2FilteredRanking]
   );
 
   const v2AvgPrecision = useMemo(() => {
@@ -259,9 +294,9 @@ export default function RankingPage() {
       if (isV2) {
         const tabLabel = V2_TAB_LABELS[v2Tab];
         if (format === 'excel') {
-          exportRankingV2ToExcel(v2Ranking, sessionLabel, tabLabel);
+          exportRankingV2ToExcel(v2FilteredRanking, sessionLabel, tabLabel);
         } else {
-          exportRankingV2ToCsv(v2Ranking, sessionLabel, tabLabel);
+          exportRankingV2ToCsv(v2FilteredRanking, sessionLabel, tabLabel);
         }
       } else {
         const list = currentList as UserRankingCounts[] & UserRankingRecounts[] & UserRankingGlobal[];
@@ -299,13 +334,13 @@ export default function RankingPage() {
               )}
               {isV2 && (
                 <span className="ml-2 text-xs text-gray-400">
-                  ({v2Ranking.length} operadores)
+                  ({v2FilteredRanking.length} operadores)
                 </span>
               )}
             </p>
           </div>
           <ExportButtons
-            disabled={(isV2 ? v2Ranking.length : currentList.length) === 0}
+            disabled={(isV2 ? v2FilteredRanking.length : currentList.length) === 0}
             loading={loading || exportLoading}
             onExcelExport={() => handleExport('excel')}
             onCsvExport={() => handleExport('csv')}
@@ -335,7 +370,7 @@ export default function RankingPage() {
         {!loading && !error && selectedSession && !isV2 && rankings && (
           <>
             {/* Selector de tipo de ranking + filtro de usuario */}
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6">
               <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
                 {(['counts', 'recounts', 'global'] as RankingType[]).map((t) => (
                   <button
@@ -354,23 +389,18 @@ export default function RankingPage() {
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="relative">
-                  <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
-                  <input
-                    type="text"
+                <div className="min-w-[220px] max-w-sm">
+                  <MultiSelectDropdown
+                    options={v1UserOptions}
+                    selectedValues={selectedUsers}
+                    onChange={setSelectedUsers}
+                    label="Usuarios"
+                    icon="ri-user-3-line"
                     placeholder="Buscar usuario..."
-                    value={userFilter}
-                    onChange={(e) => setUserFilter(e.target.value)}
-                    className="border border-gray-200 rounded-lg text-sm pl-9 pr-3 py-2 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 min-w-[200px]"
+                    emptyMessage="No hay usuarios"
+                    allLabel="Todos los usuarios"
+                    loading={loading}
                   />
-                  {userFilter && (
-                    <button
-                      onClick={() => setUserFilter('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
-                    >
-                      <i className="ri-close-line text-sm"></i>
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -391,10 +421,10 @@ export default function RankingPage() {
                   <i className="ri-shield-check-line text-emerald-600"></i>
                   <span>{enoughDataList.length} con volumen suficiente (&ge;20)</span>
                 </div>
-                {userFilter && (
+                {selectedUsers.length > 0 && (
                   <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-sm px-4 py-2 rounded-full text-emerald-700">
-                    <i className="ri-search-line"></i>
-                    <span>Filtro: &ldquo;{userFilter}&rdquo;</span>
+                    <i className="ri-user-search-line"></i>
+                    <span>{selectedUsers.length} usuario(s) seleccionado(s)</span>
                   </div>
                 )}
               </div>
@@ -404,8 +434,8 @@ export default function RankingPage() {
               <EmptyState
                 title="Sin datos de ranking"
                 message={
-                  userFilter
-                    ? `No se encontraron usuarios que coincidan con "${userFilter}".`
+                  selectedUsers.length > 0
+                    ? `No hay datos para los usuarios seleccionados.`
                     : `No hay métricas de usuarios para esta sesión en "${RANKING_TYPE_LABELS[rankingType]}".`
                 }
                 icon="ri-user-line"
@@ -687,8 +717,8 @@ export default function RankingPage() {
         {/* ─── V2 CONTENT ─────────────────────────────────────────────── */}
         {!loading && !error && selectedSession && isV2 && (
           <>
-            {/* Filtros V2: Tabs + búsqueda de usuario */}
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
+            {/* Filtros V2: Tabs + filtro de usuarios */}
+            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-4">
               <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
                 {(['normal', 'recount', 'global'] as RankingV2Type[]).map((t) => (
                   <button
@@ -707,23 +737,18 @@ export default function RankingPage() {
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="relative">
-                  <i className="ri-search-line absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
-                  <input
-                    type="text"
+                <div className="min-w-[220px] max-w-sm">
+                  <MultiSelectDropdown
+                    options={v2UserOptions}
+                    selectedValues={selectedUsers}
+                    onChange={setSelectedUsers}
+                    label="Usuarios"
+                    icon="ri-user-3-line"
                     placeholder="Buscar usuario..."
-                    value={userFilter}
-                    onChange={(e) => setUserFilter(e.target.value)}
-                    className="border border-gray-200 rounded-lg text-sm pl-9 pr-3 py-2 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 min-w-[200px]"
+                    emptyMessage="No hay usuarios"
+                    allLabel="Todos los usuarios"
+                    loading={loading}
                   />
-                  {userFilter && (
-                    <button
-                      onClick={() => setUserFilter('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
-                    >
-                      <i className="ri-close-line text-sm"></i>
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -805,7 +830,7 @@ export default function RankingPage() {
             </div>
 
             {/* Summary badges V2 */}
-            {v2Ranking.length > 0 && (
+            {v2FilteredRanking.length > 0 && (
               <div className="flex flex-wrap gap-3 mb-6">
                 <div className="flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full">
                   <i className="ri-star-line text-amber-400"></i>
@@ -814,7 +839,7 @@ export default function RankingPage() {
                 </div>
                 <div className="flex items-center gap-2 bg-white border border-gray-200 text-sm px-4 py-2 rounded-full text-gray-600">
                   <i className="ri-user-line text-emerald-600"></i>
-                  <span>{v2Ranking.length} operadores</span>
+                  <span>{v2FilteredRanking.length} operadores</span>
                 </div>
                 <div className="flex items-center gap-2 bg-white border border-gray-200 text-sm px-4 py-2 rounded-full text-gray-600">
                   <i className="ri-shield-check-line text-emerald-600"></i>
@@ -822,23 +847,23 @@ export default function RankingPage() {
                 </div>
                 <div className="flex items-center gap-2 bg-white border border-gray-200 text-sm px-4 py-2 rounded-full text-gray-600">
                   <i className="ri-file-list-3-line text-emerald-600"></i>
-                  <span>{v2Ranking.reduce((s, u) => s + u.total_conteos, 0).toLocaleString()} conteos totales</span>
+                  <span>{v2FilteredRanking.reduce((s, u) => s + u.total_conteos, 0).toLocaleString()} conteos totales</span>
                 </div>
-                {userFilter && (
+                {selectedUsers.length > 0 && (
                   <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-sm px-4 py-2 rounded-full text-emerald-700">
-                    <i className="ri-search-line"></i>
-                    <span>Filtro: &ldquo;{userFilter}&rdquo;</span>
+                    <i className="ri-user-search-line"></i>
+                    <span>{selectedUsers.length} usuario(s) seleccionado(s)</span>
                   </div>
                 )}
               </div>
             )}
 
-            {v2Ranking.length === 0 ? (
+            {v2FilteredRanking.length === 0 ? (
               <EmptyState
                 title="Sin datos de ranking V2"
                 message={
-                  userFilter
-                    ? `No se encontraron usuarios que coincidan con "${userFilter}".`
+                  selectedUsers.length > 0
+                    ? `No hay datos para los usuarios seleccionados.`
                     : `No hay datos de ranking para esta configuración en "${V2_TAB_LABELS[v2Tab]}".`
                 }
                 icon="ri-user-line"
@@ -862,7 +887,7 @@ export default function RankingPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {v2Ranking.map((user, index) => {
+                      {v2FilteredRanking.map((user, index) => {
                         const pos = index + 1;
                         const hasEnough = user.total_conteos >= 20;
                         const precision = Number(user.precision_porcentaje);
