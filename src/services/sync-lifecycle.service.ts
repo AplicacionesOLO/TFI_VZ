@@ -163,7 +163,7 @@ export async function forceReleaseSyncLock(
 
 export async function cleanupZombieSyncs(
   staleMinutes: number = 60,
-  orphanMinutes: number = 5
+  orphanMinutes: number = 15
 ): Promise<SyncCleanupResult> {
   console.log('[SyncLifecycle] cleanupZombieSyncs — staleMinutes:', staleMinutes, 'orphanMinutes:', orphanMinutes);
 

@@ -242,6 +242,8 @@ interface WarehouseCardProps {
   onSyncStop: () => void;
   showToast: (message: string, type: ToastType) => void;
   triggerRefresh: () => void;
+  isAnySyncing: boolean;
+  onActiveChange: (sessionId: string, isActive: boolean) => void;
 }
 
 function WarehouseCard({
@@ -253,6 +255,8 @@ function WarehouseCard({
   onSyncStop,
   showToast,
   triggerRefresh,
+  isAnySyncing,
+  onActiveChange,
 }: WarehouseCardProps) {
   const { status: rawStatus, startPolling, stopPolling } = useSyncPolling(warehouse.sessionId);
 
@@ -329,7 +333,19 @@ function WarehouseCard({
     checkOnMount();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Derived booleans — MUST be declared BEFORE useCallback hooks that reference them ───
+  const isThisActive = isActiveState(effectiveStatus);
+  const needsUnlock = isProblemState(effectiveStatus);
+  const canCancel = isCancellableState(effectiveStatus);
+  const isBlocked = !isThisActive && isAnySyncing;
+
   const handleSync = useCallback(async () => {
+    // Block if another warehouse is syncing
+    if (isBlocked) {
+      showToast('Hay otra sincronización en curso. Esperá a que termine.', 'warning');
+      return;
+    }
+
     // Block if this warehouse is already active
     if (isActiveState(effectiveStatus)) {
       showToast(`${warehouse.name} ya está sincronizando.`, 'warning');
@@ -420,7 +436,7 @@ function WarehouseCard({
       localStartingRef.current = false;
       showToast(`Error en ${warehouse.name}: ${msg}`, 'error');
     }
-  }, [effectiveStatus, warehouse, selectedSituation, showToast, acquireSyncLock, startPolling, onSyncStart]);
+  }, [effectiveStatus, warehouse, selectedSituation, showToast, acquireSyncLock, startPolling, onSyncStart, isBlocked]);
 
   const handleStop = useCallback(async () => {
     // Use backend sync_run_id as primary source, fallback to local ref
@@ -451,11 +467,16 @@ function WarehouseCard({
     onSyncStop();
   }, [state.syncRunId, warehouse, showToast, stopPolling, onSyncStop]);
 
-  const isThisActive = isActiveState(effectiveStatus);
-  const needsUnlock = isProblemState(effectiveStatus);
-  const canCancel = isCancellableState(effectiveStatus);
   const statusColor = getStatusColorClasses(effectiveStatus);
   const hasActiveSyncRun = Boolean(state.syncRunId) && isThisActive;
+
+  // Notify parent when active state changes (for cross-warehouse blocking)
+  useEffect(() => {
+    onActiveChange(warehouse.sessionId, isThisActive);
+    return () => {
+      onActiveChange(warehouse.sessionId, false);
+    };
+  }, [isThisActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Visual warning for missing heartbeat (does NOT change status)
   const missingHeartbeat = hasMissingHeartbeat(rawStatus);
@@ -570,9 +591,11 @@ function WarehouseCard({
       <div className="flex items-center gap-2">
         <button
           onClick={handleSync}
-          disabled={isThisActive}
+          disabled={isThisActive || isBlocked}
           className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
             isThisActive
+              ? 'border-gray-200 text-gray-400 bg-white/60 cursor-not-allowed'
+              : isBlocked
               ? 'border-gray-200 text-gray-400 bg-white/60 cursor-not-allowed'
               : `border-white/80 ${warehouse.textClass} bg-white ${warehouse.hoverBgClass} shadow-sm`
           }`}
@@ -580,6 +603,8 @@ function WarehouseCard({
           <div className="w-4 h-4 flex items-center justify-center">
             {isThisActive ? (
               <i className="ri-loader-4-line animate-spin text-sm"></i>
+            ) : isBlocked ? (
+              <i className="ri-lock-line text-sm"></i>
             ) : needsUnlock ? (
               <i className="ri-restart-line text-sm"></i>
             ) : effectiveStatus === 'completed' ? (
@@ -596,6 +621,8 @@ function WarehouseCard({
             ? effectiveStatus === 'starting'
               ? 'Iniciando...'
               : 'Sincronizando...'
+            : isBlocked
+            ? 'Esperando...'
             : effectiveStatus === 'completed'
             ? 'Actualizado'
             : effectiveStatus === 'failed' || effectiveStatus === 'timeout' || effectiveStatus === 'cancelled'
@@ -640,6 +667,7 @@ export default function WarehouseSyncButtons() {
   const [showForceModal, setShowForceModal] = useState<string | null>(null);
   const [forceLoading, setForceLoading] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [activeSyncSessions, setActiveSyncSessions] = useState<Set<string>>(new Set());
 
   const mountedRef = useRef(true);
 
@@ -657,6 +685,21 @@ export default function WarehouseSyncButtons() {
       if (mountedRef.current) setToast(null);
     }, duration);
   }, []);
+
+  // Track which sessions are actively syncing (for cross-warehouse blocking)
+  const handleActiveChange = useCallback((sessionId: string, isActive: boolean) => {
+    setActiveSyncSessions((prev) => {
+      const next = new Set(prev);
+      if (isActive) {
+        next.add(sessionId);
+      } else {
+        next.delete(sessionId);
+      }
+      return next;
+    });
+  }, []);
+
+  const isAnySyncing = activeSyncSessions.size > 0;
 
   const handleForceUnlock = useCallback(async (warehouse: Warehouse) => {
     setForceLoading(true);
@@ -804,6 +847,8 @@ export default function WarehouseSyncButtons() {
             onSyncStop={() => console.log(`[WarehouseSyncButtons] ${wh.name} sync stopped`)}
             showToast={showToast}
             triggerRefresh={triggerRefresh}
+            isAnySyncing={isAnySyncing}
+            onActiveChange={handleActiveChange}
           />
         ))}
       </div>
