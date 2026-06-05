@@ -106,6 +106,10 @@ export default function RankingPage() {
   const [takeDropdownOpen, setTakeDropdownOpen] = useState(false);
   const takeDropdownRef = useRef<HTMLDivElement>(null);
 
+  // ─── V2: popups de detalle ───────────────────────────────────────────
+  const [openPrecisionUserId, setOpenPrecisionUserId] = useState<string | null>(null);
+  const [openConteosUserId, setOpenConteosUserId] = useState<string | null>(null);
+
   // ─── Cerrar dropdown al hacer clic afuera ──────────────────────────────
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -116,6 +120,23 @@ export default function RankingPage() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // ─── Cerrar popups al hacer clic afuera ─────────────────────────────
+  const popupPrecisionRef = useRef<HTMLDivElement>(null);
+  const popupConteosRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      const insidePrecision = popupPrecisionRef.current?.contains(e.target as Node);
+      const insideConteos = popupConteosRef.current?.contains(e.target as Node);
+      if (!insidePrecision) setOpenPrecisionUserId(null);
+      if (!insideConteos) setOpenConteosUserId(null);
+    }
+    if (openPrecisionUserId || openConteosUserId) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [openPrecisionUserId, openConteosUserId]);
 
   // ─── Fetch V1 ──────────────────────────────────────────────────────────
   const fetchV1 = useCallback(() => {
@@ -914,22 +935,13 @@ export default function RankingPage() {
                                 </div>
                                 <div>
                                   <div className="text-sm font-semibold text-gray-800">{user.user_id}</div>
-                                  <div className="relative group inline-block">
-                                    <span className="text-xs text-gray-400 cursor-help border-b border-dotted border-gray-300">
+                                  <div className="relative inline-block">
+                                    <button
+                                      onClick={() => setOpenConteosUserId(openConteosUserId === user.user_id ? null : user.user_id)}
+                                      className="text-xs text-gray-400 cursor-pointer border-b border-dotted border-gray-300 hover:text-gray-600 hover:border-gray-400 transition-colors"
+                                    >
                                       {user.total_conteos_global} {user.total_conteos_global === 1 ? 'conteo' : 'conteos'}
-                                    </span>
-                                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 pointer-events-none">
-                                      <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg max-w-xs whitespace-normal">
-                                        <div className="font-semibold mb-1">Cálculo: COUNT(DISTINCT count_id)</div>
-                                        <div className="text-gray-300">Conteos realizados: <span className="text-white font-semibold">{user.total_conteos_global}</span></div>
-                                        <div className="text-gray-300 mt-1">Tomas distintas: <span className="text-white font-semibold">{user.total_tomas}</span></div>
-                                        <div className="text-gray-300">Tomas:</div>
-                                        <div className="text-white leading-relaxed">
-                                          {user.take_names || '—'}
-                                        </div>
-                                      </div>
-                                      <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900 ml-3"></div>
-                                    </div>
+                                    </button>
                                   </div>
                                 </div>
                               </div>
@@ -957,7 +969,12 @@ export default function RankingPage() {
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                              <PrecisionBar value={precision} />
+                              <button
+                                onClick={() => setOpenPrecisionUserId(openPrecisionUserId === user.user_id ? null : user.user_id)}
+                                className="w-full cursor-pointer"
+                              >
+                                <PrecisionBar value={precision} />
+                              </button>
                             </td>
                             <td className="px-5 py-4 text-center">
                               <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${level.className}`}>
@@ -972,6 +989,157 @@ export default function RankingPage() {
                 </div>
               </div>
             )}
+
+            {/* Popup: Detalle de precisión */}
+            {openPrecisionUserId && (() => {
+              const u = v2FilteredRanking.find((x) => x.user_id === openPrecisionUserId);
+              if (!u) return null;
+              const p = Number(u.precision_porcentaje);
+              return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center" onClick={() => setOpenPrecisionUserId(null)}>
+                  <div className="absolute inset-0 bg-black/30"></div>
+                  <div
+                    ref={popupPrecisionRef}
+                    className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{u.user_id}</div>
+                        <div className="text-xs text-gray-400">Detalle del % Precisión</div>
+                      </div>
+                      <button
+                        onClick={() => setOpenPrecisionUserId(null)}
+                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer text-gray-400 hover:text-gray-600"
+                      >
+                        <i className="ri-close-line text-lg"></i>
+                      </button>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                      <div className="text-lg font-bold text-gray-900 mb-1">
+                        {u.conteos_exactos.toLocaleString()} ÷ {u.total_conteos.toLocaleString()} × 100 = <span className="text-emerald-600">{p}%</span>
+                      </div>
+                      <div className="text-xs text-gray-400">Fórmula: Exactos ÷ Total conteos × 100</div>
+                    </div>
+
+                    <div className="space-y-2 mb-4">
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Total conteos</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_conteos.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Errores</span>
+                        <span className="text-sm font-bold text-red-600">{u.conteos_con_diferencia.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Exactos</span>
+                        <span className="text-sm font-bold text-emerald-600">{u.conteos_exactos.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Artículos distintos</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_articulos_contados.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Ubicaciones distintas</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_ubicaciones.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Dif. absoluta total</span>
+                        <span className="text-sm font-bold text-gray-900">{Number(u.diferencia_absoluta_total).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 rounded-xl p-4">
+                      <div className="text-xs font-semibold text-amber-700 mb-2">Tomas incluidas en este cálculo</div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-bold text-amber-800">{u.total_tomas} tomas</span>
+                        <span className="text-xs text-amber-500">·</span>
+                        <span className="text-xs text-amber-500">{u.total_conteos_global.toLocaleString()} conteos totales</span>
+                      </div>
+                      <div className="text-sm text-amber-700 leading-relaxed">
+                        {u.take_names || '—'}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 text-center">
+                      <button
+                        onClick={() => setOpenPrecisionUserId(null)}
+                        className="text-sm text-gray-400 hover:text-gray-600 cursor-pointer transition-colors"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Popup: Detalle de conteos globales */}
+            {openConteosUserId && (() => {
+              const u = v2FilteredRanking.find((x) => x.user_id === openConteosUserId);
+              if (!u) return null;
+              return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center" onClick={() => setOpenConteosUserId(null)}>
+                  <div className="absolute inset-0 bg-black/30"></div>
+                  <div
+                    ref={popupConteosRef}
+                    className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{u.user_id}</div>
+                        <div className="text-xs text-gray-400">Detalle de conteos globales</div>
+                      </div>
+                      <button
+                        onClick={() => setOpenConteosUserId(null)}
+                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer text-gray-400 hover:text-gray-600"
+                      >
+                        <i className="ri-close-line text-lg"></i>
+                      </button>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                      <div className="text-sm text-gray-500 mb-1">Métrica</div>
+                      <div className="text-2xl font-bold text-gray-900">{u.total_conteos_global.toLocaleString()}</div>
+                      <div className="text-xs text-gray-400 mt-1">COUNT(DISTINCT count_id) — conteos únicos realizados</div>
+                    </div>
+
+                    <div className="space-y-2 mb-4">
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Tomas distintas</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_tomas}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Artículos distintos</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_articulos_contados.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-600">Ubicaciones distintas</span>
+                        <span className="text-sm font-bold text-gray-900">{u.total_ubicaciones.toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 rounded-xl p-4">
+                      <div className="text-xs font-semibold text-amber-700 mb-2">Tomas registradas</div>
+                      <div className="text-sm text-amber-700 leading-relaxed">
+                        {u.take_names || '—'}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 text-center">
+                      <button
+                        onClick={() => setOpenConteosUserId(null)}
+                        className="text-sm text-gray-400 hover:text-gray-600 cursor-pointer transition-colors"
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Legend */}
             <div className="flex flex-wrap gap-4 mt-5 text-xs text-gray-500">
