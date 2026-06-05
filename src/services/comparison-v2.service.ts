@@ -64,6 +64,8 @@ export async function getSingleTakeLinesV2(
     p_status_filter: filters.status_filter ?? null,
     p_page: filters.page ?? 1,
     p_page_size: filters.page_size ?? 20,
+    p_date_from: filters.date_from || null,
+    p_date_to: filters.date_to || null,
   });
 
   if (error) {
@@ -90,6 +92,8 @@ export async function getAllComparisonV2ForExport(
       status_filter: filters.status_filter,
       page: 1,
       page_size: 10000,
+      date_from: filters.date_from,
+      date_to: filters.date_to,
     });
 
     if (totalCount > 10000) {
@@ -103,6 +107,8 @@ export async function getAllComparisonV2ForExport(
           status_filter: filters.status_filter,
           page: p,
           page_size: 10000,
+          date_from: filters.date_from,
+          date_to: filters.date_to,
         });
         allLines.push(...batch.lines);
       }

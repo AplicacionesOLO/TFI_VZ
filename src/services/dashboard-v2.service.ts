@@ -17,8 +17,8 @@ export async function getDashboardV2Stats(
     .rpc('get_dashboard_stats_v2_full', {
       p_session_id: sessionId,
       p_take_names: takeNames && takeNames.length > 0 ? takeNames : null,
-      p_date_from: dateRange?.dateFrom ? new Date(dateRange.dateFrom).toISOString() : null,
-      p_date_to: dateRange?.dateTo ? new Date(dateRange.dateTo + 'T23:59:59.999Z').toISOString() : null,
+      p_date_from: dateRange?.dateFrom ? `${dateRange.dateFrom}T00:00:00.000Z` : null,
+      p_date_to: dateRange?.dateTo ? `${dateRange.dateTo}T23:59:59.999Z` : null,
     })
     .single();
 
@@ -45,8 +45,8 @@ export async function getDashboardV2Diffs(
       p_session_id: sessionId,
       p_limit: limit,
       p_take_names: takeNames && takeNames.length > 0 ? takeNames : null,
-      p_date_from: dateRange?.dateFrom ? new Date(dateRange.dateFrom).toISOString() : null,
-      p_date_to: dateRange?.dateTo ? new Date(dateRange.dateTo + 'T23:59:59.999Z').toISOString() : null,
+      p_date_from: dateRange?.dateFrom ? `${dateRange.dateFrom}T00:00:00.000Z` : null,
+      p_date_to: dateRange?.dateTo ? `${dateRange.dateTo}T23:59:59.999Z` : null,
     });
 
   if (error) {

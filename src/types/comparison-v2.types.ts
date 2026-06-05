@@ -75,6 +75,8 @@ export interface SingleTakeFilters {
   status_filter?: string;
   page?: number;
   page_size?: number;
+  date_from?: string;
+  date_to?: string;
 }
 
 // ─── Resumen de estados para los pills ─────────────────────────────────────

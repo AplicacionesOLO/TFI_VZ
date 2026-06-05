@@ -126,6 +126,8 @@ export default function ComparisonV2Page() {
         status_filter: statusFilter || undefined,
         page,
         page_size: PAGE_SIZE,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       })
         .then(({ lines: data, totalCount: tc }) => {
           setLines(data);
