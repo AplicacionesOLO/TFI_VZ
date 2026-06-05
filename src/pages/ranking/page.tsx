@@ -881,13 +881,15 @@ export default function RankingPage() {
 
             {v2FilteredRanking.length === 0 ? (
               <EmptyState
-                title="Sin datos de ranking V2"
+                title={v2Tab === 'recount' ? 'Sin datos de reconteos' : v2Tab === 'normal' ? 'Sin datos de conteos' : 'Sin datos globales'}
                 message={
                   selectedUsers.length > 0
                     ? `No hay datos para los usuarios seleccionados.`
-                    : `No hay datos de ranking para esta configuración en "${V2_TAB_LABELS[v2Tab]}".`
+                    : v2Tab === 'recount'
+                      ? `No se encontraron tomas de tipo RECONTEO en esta sesión. Solo hay tomas NORMAL disponibles. Revisá si se cargaron reconteos en el sistema.`
+                      : `No hay datos de ranking para esta configuración en "${V2_TAB_LABELS[v2Tab]}".`
                 }
-                icon="ri-user-line"
+                icon={v2Tab === 'recount' ? 'ri-loop-right-line' : 'ri-user-line'}
               />
             ) : (
               <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
