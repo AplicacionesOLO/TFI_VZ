@@ -915,7 +915,7 @@ export default function RankingPage() {
                                 <div>
                                   <div className="text-sm font-semibold text-gray-800">{user.user_id}</div>
                                   {!hasEnough && (
-                                    <div className="text-xs text-gray-400">{user.total_conteos} conteos</div>
+                                    <div className="text-xs text-gray-400">{user.total_conteos_global.toLocaleString()} conteos</div>
                                   )}
                                 </div>
                               </div>

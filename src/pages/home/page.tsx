@@ -36,6 +36,10 @@ export default function HomePage() {
   const [takesLoading, setTakesLoading] = useState(false);
   const [takesError, setTakesError] = useState<string | null>(null);
 
+  // Date range filter
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === selectedSession) ?? null,
     [sessions, selectedSession]
@@ -51,24 +55,44 @@ export default function HomePage() {
     return activeSession.location ? `${activeSession.name} — ${activeSession.location}` : activeSession.name;
   }, [activeSession]);
 
-  // Load available takes when session changes
+  // Reset filters when session changes
   useEffect(() => {
     if (!selectedSession || !isV2) {
       setAvailableTakes([]);
       setSelectedTakes([]);
+      setDateFrom('');
+      setDateTo('');
+      return;
+    }
+    setSelectedTakes([]);
+    setDateFrom('');
+    setDateTo('');
+  }, [selectedSession, isV2]);
+
+  // Load available takes when session or date filter changes
+  useEffect(() => {
+    if (!selectedSession || !isV2) {
+      setAvailableTakes([]);
       return;
     }
     setTakesLoading(true);
     setTakesError(null);
-    setSelectedTakes([]);
 
-    getAvailableTakesV2(selectedSession)
+    getAvailableTakesV2(selectedSession, dateFrom || undefined, dateTo || undefined)
       .then((takes) => {
         setAvailableTakes(takes);
+        // Remove selected takes that are no longer available
+        if (selectedTakes.length > 0) {
+          const availableNames = new Set(takes.map((t) => t.take_name));
+          const filtered = selectedTakes.filter((t) => availableNames.has(t) || t === '__EMPTY__');
+          if (filtered.length !== selectedTakes.length) {
+            setSelectedTakes(filtered.length === 0 ? [] : filtered);
+          }
+        }
       })
       .catch((err) => setTakesError(err?.message ?? 'Error al cargar tomas'))
       .finally(() => setTakesLoading(false));
-  }, [selectedSession, isV2]);
+  }, [selectedSession, isV2, dateFrom, dateTo]);
 
   const fetchData = useCallback(() => {
     if (!selectedSession) {
@@ -79,11 +103,12 @@ export default function HomePage() {
     setError(null);
 
     const takeFilter = selectedTakes.length > 0 ? selectedTakes : undefined;
+    const dateRange = (dateFrom || dateTo) ? { dateFrom: dateFrom || undefined, dateTo: dateTo || undefined } : undefined;
 
     if (isV2) {
       Promise.all([
-        getDashboardV2Stats(selectedSession, takeFilter),
-        getDashboardV2Diffs(selectedSession, 10, takeFilter),
+        getDashboardV2Stats(selectedSession, takeFilter, dateRange),
+        getDashboardV2Diffs(selectedSession, 10, takeFilter, dateRange),
       ])
         .then(([stats, diffs]) => {
           setStatsV2(stats);
@@ -97,7 +122,7 @@ export default function HomePage() {
         .catch((err) => setError(err?.message ?? 'Error al cargar el dashboard'))
         .finally(() => setLoading(false));
     }
-  }, [selectedSession, isV2, refreshTrigger, selectedTakes]);
+  }, [selectedSession, isV2, refreshTrigger, selectedTakes, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchData();
@@ -245,6 +270,7 @@ export default function HomePage() {
             </div>
             <div className="bg-white rounded-xl border border-gray-100 p-4">
               <div className="flex flex-wrap items-start gap-4">
+                {/* Selector de tomas */}
                 <div className="flex-1 min-w-[280px] max-w-md">
                   <DashboardTakeSelector
                     takes={availableTakes}
@@ -254,6 +280,43 @@ export default function HomePage() {
                     disabled={!selectedSession}
                   />
                 </div>
+
+                {/* Rango de fechas */}
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-gray-500">Desde</label>
+                    <input
+                      type="date"
+                      value={dateFrom}
+                      onChange={(e) => setDateFrom(e.target.value)}
+                      className="text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 cursor-pointer min-w-[150px]"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-gray-500">Hasta</label>
+                    <input
+                      type="date"
+                      value={dateTo}
+                      onChange={(e) => setDateTo(e.target.value)}
+                      className="text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 cursor-pointer min-w-[150px]"
+                    />
+                  </div>
+                  {(dateFrom || dateTo || selectedTakes.length > 0) && (
+                    <button
+                      onClick={() => {
+                        setSelectedTakes([]);
+                        setDateFrom('');
+                        setDateTo('');
+                      }}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 cursor-pointer px-2 py-1 rounded hover:bg-gray-50 whitespace-nowrap"
+                      title="Limpiar filtros"
+                    >
+                      <i className="ri-close-circle-line"></i>
+                      Limpiar
+                    </button>
+                  )}
+                </div>
+
                 {takesError && (
                   <div className="flex items-center gap-2 text-sm text-red-600">
                     <i className="ri-error-warning-line"></i>

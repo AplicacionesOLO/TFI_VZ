@@ -130,6 +130,7 @@ export interface UserRankingV2 {
   conteos_con_diferencia: number;
   diferencia_absoluta_total: number;
   precision_porcentaje: number;
+  total_conteos_global: number;
 }
 
 export interface RankingV2Filters {
