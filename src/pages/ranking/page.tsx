@@ -914,9 +914,23 @@ export default function RankingPage() {
                                 </div>
                                 <div>
                                   <div className="text-sm font-semibold text-gray-800">{user.user_id}</div>
-                                  {!hasEnough && (
-                                    <div className="text-xs text-gray-400">{user.total_conteos_global.toLocaleString()} conteos</div>
-                                  )}
+                                  <div className="relative group inline-block">
+                                    <span className="text-xs text-gray-400 cursor-help border-b border-dotted border-gray-300">
+                                      {user.total_conteos_global} {user.total_conteos_global === 1 ? 'conteo' : 'conteos'}
+                                    </span>
+                                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 pointer-events-none">
+                                      <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg max-w-xs whitespace-normal">
+                                        <div className="font-semibold mb-1">Cálculo: COUNT(DISTINCT count_id)</div>
+                                        <div className="text-gray-300">Conteos realizados: <span className="text-white font-semibold">{user.total_conteos_global}</span></div>
+                                        <div className="text-gray-300 mt-1">Tomas distintas: <span className="text-white font-semibold">{user.total_tomas}</span></div>
+                                        <div className="text-gray-300">Tomas:</div>
+                                        <div className="text-white leading-relaxed">
+                                          {user.take_names || '—'}
+                                        </div>
+                                      </div>
+                                      <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900 ml-3"></div>
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             </td>

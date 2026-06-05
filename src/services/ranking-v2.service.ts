@@ -5,7 +5,7 @@ import type { UserRankingV2, RankingV2Filters } from '@/types/tfi.types';
 export async function getRankingV2(
   filters: RankingV2Filters,
 ): Promise<UserRankingV2[]> {
-  const { data, error } = await supabase.rpc('get_user_ranking_v2_full', {
+  const { data, error } = await supabase.rpc('get_user_ranking_v2_full_v3', {
     p_session_id: filters.session_id,
     p_take_names: filters.take_names ?? null,
     p_take_type: filters.take_type ?? null,

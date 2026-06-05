@@ -131,6 +131,8 @@ export interface UserRankingV2 {
   diferencia_absoluta_total: number;
   precision_porcentaje: number;
   total_conteos_global: number;
+  total_tomas: number;
+  take_names: string | null;
 }
 
 export interface RankingV2Filters {
